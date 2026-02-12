@@ -12,3 +12,5 @@ wheels/
 # Emacs
 \#*#
 *~
+
+skip_this/

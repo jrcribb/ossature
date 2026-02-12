@@ -1,0 +1,20 @@
+# NTT Configuration
+# https://github.com/beshrkayali/ntt
+
+[project]
+name = "{name}"
+version = "0.0.1"
+spec_dir = "specs"
+context_dir = "context"
+
+[output]
+dir = "app"
+language = "python"
+
+[test]
+runner = "pytest"
+coverage = true
+coverage_threshold = 80.0
+
+[context]
+files = []

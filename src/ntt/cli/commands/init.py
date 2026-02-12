@@ -1,6 +1,9 @@
 from pathlib import Path
 
 from rich.console import Console
+from rich.panel import Panel
+
+from ntt.templates.manager import TemplateManager
 
 
 def run_init(
@@ -17,3 +20,50 @@ def run_init(
         root.mkdir(parents=True, exist_ok=True)
 
     console.print(f"\n[bold]Initializing NTT project:[/] {project_name}\n")
+
+    manager = TemplateManager(root)
+    result = manager.init_project(
+        name=project_name,
+        include_example=include_example,
+    )
+
+    if result.created:
+        console.print("[green]Created:[/]")
+        for path in result.created:
+            rel_path = path.relative_to(root) if path.is_relative_to(root) else path
+            console.print(f"  • {rel_path}")
+
+    if result.skipped:
+        console.print("\n[yellow]Skipped (already exists):[/]")
+        for path in result.skipped:
+            rel_path = path.relative_to(root) if path.is_relative_to(root) else path
+            console.print(f"  • {rel_path}")
+
+    if result.errors:
+        console.print("\n[red]Errors:[/]")
+        for error in result.errors:
+            console.print(f"  • {error}")
+
+    if result.success:
+        console.print(
+            Panel(
+                "[green]✓[/] Project initialized successfully!",
+                # "[green]✓[/] Project initialized successfully!\n\n"
+                # "Next steps:\n"
+                # "  1. Edit [cyan]ntt.toml[/] to configure your project\n"
+                # "  2. Create specs with [cyan]ntt new <name>[/]\n"
+                # "  3. Validate with [cyan]ntt validate --all[/]\n"
+                # "  4. Build with [cyan]ntt build <spec>[/]",
+                title="Success",
+                border_style="green",
+            )
+        )
+    else:
+        console.print(
+            Panel(
+                "[red]✗[/] Project initialization had errors",
+                title="Error",
+                border_style="red",
+            )
+        )
+        raise SystemExit(1)

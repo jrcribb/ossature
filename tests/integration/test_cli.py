@@ -17,4 +17,4 @@ class TestInitCmd:
             result = runner.invoke(cli, ["init", "test-project"])
 
             assert result.exit_code == 0
-            # assert (Path("my-project") / "ntt.toml").exists()
+            assert (Path("test-project") / "ntt.toml").exists()
