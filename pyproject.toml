@@ -13,9 +13,15 @@ dependencies = [
     "rich>=14.3.2"
 ]
 
+[dependency-groups]
+dev = [
+    "ruff>=0.15.0",
+]
+
 [project.scripts]
 ntt = "ntt.cli:app"
 
 [build-system]
 requires = ["uv_build>=0.9.26,<0.10.0"]
 build-backend = "uv_build"
+

@@ -1,0 +1,9 @@
+.PHONY: lint format
+
+lint:
+	uv run ruff check src/
+	uv run ruff format --check src/
+
+format:
+	uv run ruff check --fix src/
+	uv run ruff format src/
