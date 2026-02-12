@@ -1,10 +1,9 @@
-from ntt import __version__, __app_name__
+from pathlib import Path
 
 import click
 from rich.console import Console
 
-from pathlib import Path
-
+from ntt import __app_name__, __version__
 
 console = Console()
 
@@ -29,3 +28,21 @@ def cli(ctx: click.Context, config: Path | None, verbose: bool) -> None:
     ctx.obj["config_path"] = config
     ctx.obj["verbose"] = verbose
     ctx.obj["console"] = console
+
+
+@cli.command()
+@click.argument("name", default=".")
+@click.option(
+    "--no-example",
+    is_flag=True,
+    help="Don't create example spec files",
+)
+@click.pass_context
+def init(ctx: click.Context, name: str, no_example: bool) -> None:
+    from ntt.cli.commands.init import run_init
+
+    run_init(
+        name=name,
+        include_example=not no_example,
+        console=ctx.obj["console"],
+    )

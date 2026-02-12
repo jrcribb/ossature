@@ -1,14 +1,17 @@
 .PHONY: lint format mypy check
 
 lint:
-	uv run ruff check src/
-	uv run ruff format --check src/
+	uv run ruff check src/ tests/
+	uv run ruff format --check src/ tests/
 
 format:
 	uv run ruff check --fix src/
-	uv run ruff format src/
+	uv run ruff format src/ tests/
 
 typecheck:
-	uv run mypy src/ntt
+	uv run mypy src
 
-check: lint typecheck
+test:
+	uv run pytest tests/ -v
+
+check: lint typecheck test
