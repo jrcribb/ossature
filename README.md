@@ -1,3 +1,10 @@
-# NTT
+# NTT (Intent)
 
-Specifiction and architecture driven code generation toolkit.
+Specification and architecture driven code generation toolkit.
+
+## Quick Start
+
+```bash
+uv sync --group dev
+uv run ntt --help
+```
