@@ -3,10 +3,11 @@ name = "ntt"
 version = "0.1.0"
 description = "Specifiction and architecture driven code generation toolkit."
 readme = "README.md"
+license = { text = "MIT" }
 authors = [
     { name = "Beshr Kayali Reinholdsson", email = "me@beshr.com" }
 ]
-requires-python = ">=3.13"
+requires-python = ">=3.14"
 dependencies = [
     "claude-agent-sdk>=0.1.35",
     "click>=8.3.1",
@@ -15,6 +16,7 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+    "mypy>=1.19.1",
     "ruff>=0.15.0",
 ]
 
@@ -25,3 +27,6 @@ ntt = "ntt.cli:app"
 requires = ["uv_build>=0.9.26,<0.10.0"]
 build-backend = "uv_build"
 
+[tool.mypy]
+python_version = "3.14"
+strict = true
