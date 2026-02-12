@@ -1,0 +1,20 @@
+[project]
+name = "ntt"
+version = "0.1.0"
+description = "Specifiction and architecture driven code generation toolkit."
+readme = "README.md"
+authors = [
+    { name = "Beshr Kayali Reinholdsson", email = "me@beshr.com" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "claude-agent-sdk>=0.1.35",
+    "typer[all]>=0.23.0",
+]
+
+[project.scripts]
+ntt = "ntt:main"
+
+[build-system]
+requires = ["uv_build>=0.9.26,<0.10.0"]
+build-backend = "uv_build"
