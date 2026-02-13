@@ -50,7 +50,6 @@ class TemplateManager:
         name: str,
         spec_dir: str = "specs",
         context_dir: str = "context",
-        include_example: bool = True,
     ) -> TemplateResult:
         created: list[Path] = []
         skipped: list[Path] = []
@@ -89,12 +88,5 @@ class TemplateManager:
                 created.append(gitignore_path)
             except Exception as e:
                 errors.append(f"Failed to create .gitignore: {e}")
-
-        # Create example specs if requested
-        # if include_example:
-        #     example_result = self._create_example_specs(spec_dir)
-        #     created.extend(example_result.created)
-        #     skipped.extend(example_result.skipped)
-        #     errors.extend(example_result.errors)
 
         return TemplateResult(created=created, skipped=skipped, errors=errors)

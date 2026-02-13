@@ -8,7 +8,6 @@ from ntt.templates.manager import TemplateManager
 
 def run_init(
     name: str,
-    include_example: bool,
     console: Console,
 ) -> None:
     if name == ".":
@@ -24,7 +23,6 @@ def run_init(
     manager = TemplateManager(root)
     result = manager.init_project(
         name=project_name,
-        include_example=include_example,
     )
 
     if result.created:

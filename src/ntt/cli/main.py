@@ -32,17 +32,11 @@ def cli(ctx: click.Context, config: Path | None, verbose: bool) -> None:
 
 @cli.command()
 @click.argument("name", default=".")
-@click.option(
-    "--no-example",
-    is_flag=True,
-    help="Don't create example spec files",
-)
 @click.pass_context
-def init(ctx: click.Context, name: str, no_example: bool) -> None:
+def init(ctx: click.Context, name: str) -> None:
     from ntt.cli.commands.init import run_init
 
     run_init(
         name=name,
-        include_example=not no_example,
         console=ctx.obj["console"],
     )
