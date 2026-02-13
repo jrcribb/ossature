@@ -28,7 +28,7 @@ class TemplateLoader:
             files = resources.files("ntt.templates") / "files" / template_file
             content = files.read_text(encoding="utf-8")
 
-        except (FileNotFoundError, TypeError):
+        except FileNotFoundError, TypeError:
             template_path = Path(__file__).parent / "files" / template_file
 
             if not template_path.exists():

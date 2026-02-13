@@ -8,13 +8,10 @@ spec_dir = "specs"
 context_dir = "context"
 
 [output]
-dir = "app"
+dir = "output"
 language = "python"
 
 [test]
 runner = "pytest"
 coverage = true
 coverage_threshold = 80.0
-
-[context]
-files = []

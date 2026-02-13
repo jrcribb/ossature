@@ -11,7 +11,8 @@ requires-python = ">=3.14"
 dependencies = [
     "claude-agent-sdk>=0.1.35",
     "click>=8.3.1",
-    "rich>=14.3.2"
+    "rich>=14.3.2",
+    "tomli>=2.4.0",
 ]
 
 [dependency-groups]
@@ -31,7 +32,7 @@ build-backend = "uv_build"
 
 [tool.ruff]
 line-length = 100
-target-version = "py311"
+target-version = "py314"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "UP"]
