@@ -24,6 +24,7 @@ console = Console()
 )
 @click.pass_context
 def cli(ctx: click.Context, config: Path | None, verbose: bool) -> None:
+    """Intent - Specifiction and architecture driven code generation toolkit."""
     ctx.ensure_object(dict)
     ctx.obj["config_path"] = config
     ctx.obj["verbose"] = verbose
@@ -34,9 +35,45 @@ def cli(ctx: click.Context, config: Path | None, verbose: bool) -> None:
 @click.argument("name", default=".")
 @click.pass_context
 def init(ctx: click.Context, name: str) -> None:
+    """Initialize a new Intent project."""
     from ntt.cli.commands.init import run_init
 
     run_init(
         name=name,
+        console=ctx.obj["console"],
+    )
+
+
+@cli.command()
+@click.argument("name")
+@click.option(
+    "--type",
+    "-t",
+    "spec_type",
+    type=click.Choice(["smd", "amd"]),
+    default="smd",
+    help="Type of spec to create (defaults to smd)",
+)
+@click.option(
+    "--interactive",
+    "-i",
+    is_flag=True,
+    help="Create spec interactively",
+)
+@click.pass_context
+def new(
+    ctx: click.Context,
+    name: str,
+    spec_type: str,
+    interactive: bool,
+) -> None:
+    """Create a new spec file."""
+    from ntt.cli.commands.new import run_new
+
+    run_new(
+        name=name,
+        spec_type=spec_type,
+        interactive=interactive,
+        config_path=ctx.obj["config_path"],
         console=ctx.obj["console"],
     )
