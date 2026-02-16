@@ -77,3 +77,18 @@ def new(
         config_path=ctx.obj["config_path"],
         console=ctx.obj["console"],
     )
+
+
+@cli.command()
+@click.pass_context
+def validate(
+    ctx: click.Context,
+) -> None:
+    """Validate config and spec files."""
+    from ntt.cli.commands.validate import run_validate
+
+    run_validate(
+        config_path=ctx.obj["config_path"],
+        verbose=ctx.obj["verbose"],
+        console=ctx.obj["console"],
+    )

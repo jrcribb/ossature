@@ -137,12 +137,12 @@ def create_template_arch(name: str, spec_id: str) -> AMDSpec:
             ),
         ],
         flow="""Request
-    → MainHandler.validate()
-    → MainHandler.handle()
-        → CoreService.process()
-            → Repository.save()
-        ← Result
-    ← Response""",
+    -> MainHandler.validate()
+    -> MainHandler.handle()
+        -> CoreService.process()
+            -> Repository.save()
+        <- Result
+    <- Response""",
         dependencies=[
             Dependency(name="pydantic", purpose="Data validation and serialization"),
             Dependency(name="sqlalchemy", purpose="Database ORM"),

@@ -19,7 +19,7 @@ def render_requirement(requirement: Requirement) -> str:
         lines.append("**Errors:**")
         lines.append("")
         for condition, response in requirement.errors:
-            lines.append(f"- {condition} → {response}")
+            lines.append(f"- {condition} -> {response}")
 
     return "\n".join(lines)
 
