@@ -28,26 +28,51 @@ def run_validate(
         console.print("[yellow]No spec files found.[/]")
         return
 
+    if verbose:
+        console.print(f"Validating {len(smd_files)} SMD(s)")
+
     for smd_file in smd_files:
+        smd_filename = str(smd_file).replace(str(config.root), ".")
+        if verbose:
+            console.print(f"  Validating {smd_filename} ", end="")
         try:
             parse_smd_file(smd_file)
+            if verbose:
+                console.print("[green]✓")
         except SMDParseError as e:
-            console.print("[red]Validation error[/]")
-            console.print(f"  File: {str(smd_file).replace(str(config.root), '.')}")
-            console.print(f"  {len(e.errors)} error(s)")
+            if verbose:
+                console.print(f"[red]x[/] - {len(e.errors)} error(s)")
+            else:
+                console.print(smd_filename)
+                console.print(f"[red]Validation Error:[/] {len(e.errors)} error(s)")
+
             for error in e.errors:
                 console.print(f"  - {error}")
+
             raise SystemExit(1)
 
+    if verbose:
+        console.print()
+        console.print(f"Validating {len(amd_files)} AMD(s)")
+
     for amd_file in amd_files:
+        amd_filename = str(amd_file).replace(str(config.root), ".")
+        if verbose:
+            console.print(f"  Validating {amd_filename} ", end="")
         try:
             parse_amd_file(amd_file)
+            if verbose:
+                console.print("[green]✓")
         except AMDParseError as e:
-            console.print("[red]Validation error[/]")
-            console.print(f"  File: {str(amd_file).replace(str(config.root), '.')}")
-            console.print(f"  {len(e.errors)} error(s)")
+            if verbose:
+                console.print(f"[red]x[/] - {len(e.errors)} error(s)")
+            else:
+                console.print(smd_filename)
+                console.print(f"[red]Validation Error:[/] {len(e.errors)} error(s)")
+
             for error in e.errors:
                 console.print(f"  - {error}")
+
             raise SystemExit(1)
 
     console.print(
