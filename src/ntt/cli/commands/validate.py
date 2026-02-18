@@ -31,12 +31,17 @@ def run_validate(
     if verbose:
         console.print(f"Validating {len(smd_files)} SMD(s)")
 
+    parsed_smds = []
+    parsed_amds = []
+
     for smd_file in smd_files:
         smd_filename = str(smd_file).replace(str(config.root), ".")
         if verbose:
-            console.print(f"  Validating {smd_filename} ", end="")
+            console.print(f" {smd_filename} ", end="")
         try:
-            parse_smd_file(smd_file)
+            smd = parse_smd_file(smd_file)
+            parsed_smds.append(smd)
+
             if verbose:
                 console.print("[green]✓")
         except SMDParseError as e:
@@ -58,9 +63,11 @@ def run_validate(
     for amd_file in amd_files:
         amd_filename = str(amd_file).replace(str(config.root), ".")
         if verbose:
-            console.print(f"  Validating {amd_filename} ", end="")
+            console.print(f" {amd_filename} ", end="")
         try:
-            parse_amd_file(amd_file)
+            amd = parse_amd_file(amd_file)
+            parsed_amds.append(amd)
+
             if verbose:
                 console.print("[green]✓")
         except AMDParseError as e:
@@ -75,11 +82,28 @@ def run_validate(
 
             raise SystemExit(1)
 
+    if verbose:
+        console.print()
+        console.print("Cross-references: ", end="")
+
+    # Cross reference parsed spec ids
+    smd_spec_ids = [smd.spec_id for smd in parsed_smds]
+
+    for smd in parsed_smds:
+        for dep in smd.depends:
+            if dep not in smd_spec_ids:
+                console.print("[red]x")
+                console.print(f" Spec {smd.spec_id} has dependency {dep} that doesn't exist.")
+                raise SystemExit(1)
+
+    console.print("[green]✓ all dependency spec IDs resolve")
+
+    # Summary
     console.print(
         Panel(
             f"[green]✓[/green] Specs validated:\n"
-            f"  • {len(smd_files)} SMD(s)\n"
-            f"  • {len(amd_files)} AMD(s)",
+            f"  • {len(parsed_smds)} SMD(s)\n"
+            f"  • {len(parsed_amds)} AMD(s)",
             title="Summary",
             border_style="green",
         )
