@@ -8,7 +8,12 @@ from ntt import __app_name__, __version__
 console = Console()
 
 
-@click.group()
+class NaturalOrderGroup(click.Group):
+    def list_commands(self, ctx: click.Context) -> list[str]:
+        return list(self.commands)
+
+
+@click.group(cls=NaturalOrderGroup)
 @click.version_option(version=__version__, prog_name=__app_name__)
 @click.option(
     "--config",
