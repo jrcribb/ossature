@@ -97,3 +97,18 @@ def validate(
         verbose=ctx.obj["verbose"],
         console=ctx.obj["console"],
     )
+
+
+@cli.command()
+@click.pass_context
+def audit(
+    ctx: click.Context,
+) -> None:
+    """Semantically audit the specifications and generate plan metadata."""
+    from ntt.cli.commands.audit import run_audit
+
+    run_audit(
+        config_path=ctx.obj["config_path"],
+        verbose=ctx.obj["verbose"],
+        console=ctx.obj["console"],
+    )

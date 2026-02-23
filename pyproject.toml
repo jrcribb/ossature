@@ -9,11 +9,13 @@ authors = [
 ]
 requires-python = ">=3.14"
 dependencies = [
-    "claude-agent-sdk>=0.1.35",
     "click>=8.3.1",
+    "pydantic>=2.12.5",
+    "pydantic-ai>=1.62.0",
     "questionary>=2.1.1",
     "rich>=14.3.2",
     "tomli>=2.4.0",
+    "tomli-w>=1.2.0",
 ]
 
 [dependency-groups]

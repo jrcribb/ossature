@@ -47,6 +47,26 @@ class NTTConfig:
     def output_path(self) -> Path:
         return self.root / self.output.dir
 
+    @property
+    def metadata_path(self) -> Path:
+        return self.root / ".ntt"
+
+    @property
+    def metadata_context_path(self) -> Path:
+        return self.metadata_path / "context"
+
+    @property
+    def metadata_context_spec_briefs_path(self) -> Path:
+        return self.metadata_context_path / "spec-briefs"
+
+    @property
+    def metadata_context_interfaces_path(self) -> Path:
+        return self.metadata_context_path / "interfaces"
+
+    @property
+    def is_audited(self) -> bool:
+        return self.metadata_path.exists()
+
 
 def find_config(start_path: Path | None = None) -> Path | None:
     current = start_path or Path.cwd()
