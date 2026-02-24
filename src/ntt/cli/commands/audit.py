@@ -8,12 +8,18 @@ from rich.status import Status
 from rich.table import Table
 from rich.text import Text
 
-from ntt.audit.audit import audit_specs, save_audit_report
+from ntt.audit.audit import audit_cross_specs, audit_specs, save_audit_report
 from ntt.audit.context import generate_project_brief, generate_spec_briefs
 from ntt.audit.manifest import create_manifest, read_manifest, write_manifest
 from ntt.config.loader import ConfigError, load_config
 from ntt.models.amd import AMDSpec
-from ntt.models.audit import Severity, SpecAuditReport
+from ntt.models.audit import (
+    AuditFinding,
+    CrossSpecAuditReport,
+    CrossSpecFinding,
+    Severity,
+    SpecAuditReport,
+)
 from ntt.models.smd import SMDSpec
 from ntt.parsers.amd import AMDParseError, parse_amd_file
 from ntt.parsers.smd import SMDParseError, parse_smd_file
@@ -30,7 +36,9 @@ SEVERITY_STYLES: dict[Severity, tuple[str, str]] = {
 
 
 def print_audit_summary(
-    console: Console, report: SpecAuditReport, title: str = "Spec Audit Report"
+    console: Console,
+    report: SpecAuditReport | CrossSpecAuditReport,
+    title: str = "Spec Audit Report",
 ) -> None:
     counts = {s: 0 for s in Severity}
     for finding in report.findings:
@@ -44,7 +52,9 @@ def print_audit_summary(
     console.print(Panel(summary, title=f"[bold]{title}[/bold]", expand=False, box=box.ROUNDED))
 
 
-def print_audit_findings_table(console: Console, report: SpecAuditReport) -> None:
+def print_audit_findings_table(
+    console: Console, report: SpecAuditReport | CrossSpecAuditReport
+) -> None:
     table = Table(
         box=box.SIMPLE_HEAD,
         show_lines=True,
@@ -53,18 +63,25 @@ def print_audit_findings_table(console: Console, report: SpecAuditReport) -> Non
     )
 
     table.add_column("Severity", style="bold", width=10, no_wrap=True)
-    table.add_column("Location", style="dim", width=20)
+
+    if isinstance(report, SpecAuditReport):
+        table.add_column("Location", style="dim", width=20)
+    else:
+        table.add_column("Specs", style="dim", width=20)
+
     table.add_column("Issue", ratio=2)
     table.add_column("Suggestion", style="italic", ratio=3)
 
     severity_order = {Severity.INFO: 0, Severity.WARNING: 1, Severity.ERROR: 2}
-    sorted_findings = sorted(report.findings, key=lambda x: severity_order[x.severity])
+    sorted_findings: list[AuditFinding | CrossSpecFinding] = sorted(
+        report.findings, key=lambda x: severity_order[x.severity]
+    )
 
     for finding in sorted_findings:
         style, label = SEVERITY_STYLES[finding.severity]
         table.add_row(
             Text(label, style=f"bold {style}"),
-            finding.location,
+            finding.location if isinstance(finding, AuditFinding) else "-".join(finding.specs),
             finding.issue,
             finding.suggestion,
         )
@@ -124,10 +141,18 @@ def run_audit(
         try:
             parsed_smds, parsed_amds = quick_validate(smd_files=smd_files, amd_files=amd_files)
         except SMDParseError, AMDParseError, ValidationError:
-            console.print("[red] Specs invalid. Run: `ntt validate` to check errors.")
+            console.log("[red] Specs invalid. Run: `ntt validate` to check errors.")
             raise SystemExit(1)
 
         console.log("[green]✓ specs valid")
+
+        # TODO: Generate graph.toml
+        # graph = build_spec_graph(parsed_smds, parsed_amds)
+        # spec_graph_filepath = config.metadata_path / "graph.toml"
+        # write_spec_graph(
+        #     graph,
+        #     spec_graph_filepath
+        # )
 
         # Audit specs and generate audit report
         config.metadata_path.mkdir(parents=True, exist_ok=True)
@@ -180,12 +205,10 @@ def run_audit(
             status.start()
 
         if specs_require_audit:
-            status.update(f"Auditing {config.name} v{config.version} specs")
-            spec_audit_report = audit_specs(config, parsed_smds)
+            status.update(f"Spec audit - {config.name} v{config.version} specs")
 
-            counts = {s: 0 for s in Severity}
-            for finding in spec_audit_report.findings:
-                counts[finding.severity] += 1
+            # Spec and Architecture audit
+            spec_audit_report = audit_specs(config, parsed_smds, parsed_amds)
 
             print_audit_summary(
                 console,
@@ -193,14 +216,20 @@ def run_audit(
                 title=f"{config.name} v{config.version} - Spec Audit",
             )
 
+            audit_report_filepath = config.metadata_path / "audit-report.md"
+
             save_audit_report(
                 report=spec_audit_report,
                 name=f"{config.name} v{config.version}",
                 spec_ids=[smd.spec_id for smd in parsed_smds],
-                filename=config.metadata_path / "audit-report.md",
+                filename=audit_report_filepath,
             )
 
-            console.log(f"Report saved to [bold]{config.metadata_path / 'audit-report.md'}")
+            console.log(f"Spec audit report saved to [bold]{audit_report_filepath}")
+
+            counts = {s: 0 for s in Severity}
+            for _spec_finding in spec_audit_report.findings:
+                counts[_spec_finding.severity] += 1
 
             if any(v > 0 for _, v in counts.items()):
                 status.stop()
@@ -217,6 +246,51 @@ def run_audit(
                     raise SystemExit(1)
 
                 status.start()
+
+            # Cross spec audt
+            if len(parsed_smds) > 1:
+                status.update(f"Cross-spec audit - {config.name} v{config.version} specs")
+                cross_spec_audit_report = audit_cross_specs(config, parsed_smds, parsed_amds)
+
+                print_audit_summary(
+                    console,
+                    report=cross_spec_audit_report,
+                    title=f"{config.name} v{config.version} - Spec Audit",
+                )
+
+                cross_audit_report_filepath = config.metadata_path / "cross-audit-report.md"
+
+                save_audit_report(
+                    report=cross_spec_audit_report,
+                    name=f"{config.name} v{config.version}",
+                    spec_ids=[smd.spec_id for smd in parsed_smds],
+                    filename=cross_audit_report_filepath,
+                )
+
+                console.log(f"Cross spec audit report saved to [bold]{cross_audit_report_filepath}")
+
+                counts = {s: 0 for s in Severity}
+
+                for _cs_finding in cross_spec_audit_report.findings:
+                    counts[_cs_finding.severity] += 1
+
+                if any(v > 0 for _, v in counts.items()):
+                    status.stop()
+                    if questionary.confirm("Print full report?").ask():
+                        print_audit_findings_table(console, report=cross_spec_audit_report)
+
+                    severity_counts = ", ".join(
+                        f"{v} {k.value}(s)" for k, v in counts.items() if v > 0
+                    )
+
+                    confirm_default = counts[Severity.ERROR] == 0
+
+                    if not questionary.confirm(
+                        f"Audit found {severity_counts}. Continue?", default=confirm_default
+                    ).ask():
+                        raise SystemExit(1)
+
+                    status.start()
 
         # - BRIEFS GENERATION
         if briefs_generation_required:
@@ -250,10 +324,12 @@ def run_audit(
 
             status.stop()
         else:
-            console.log("Project brief regeneration not required")
+            console.log("[yellow]Project and spec brief regeneration not required")
 
-        # - GENERATE OR UPDATE PLAN
+        # - TODO: Generate Interfaces
+        # generate_interfaces(config, parsed_smds, parsed_amds)
 
-        ...
-
-    ...
+        # - TODO: GENERATE OR UPDATE PLAN
+        # plan = generate_plan(config, parsed_smds, parsed_amds, graph)
+        # plan_filepath = config.metadata_path / "plan.toml"
+        # write_plan(plan, plan_filepath)

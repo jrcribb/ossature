@@ -40,3 +40,14 @@ class AuditFinding(BaseModel):
 
 class SpecAuditReport(BaseModel):
     findings: list[AuditFinding]
+
+
+class CrossSpecFinding(BaseModel):
+    severity: Severity
+    specs: list[str]
+    issue: str
+    suggestion: str
+
+
+class CrossSpecAuditReport(BaseModel):
+    findings: list[CrossSpecFinding] = []
