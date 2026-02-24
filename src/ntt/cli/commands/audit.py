@@ -8,7 +8,15 @@ from rich.status import Status
 from rich.table import Table
 from rich.text import Text
 
-from ntt.audit.audit import audit_cross_specs, audit_specs, save_audit_report
+from ntt.audit.audit import (
+    audit_cross_specs,
+    audit_spec,
+    load_cross_spec_audit_data,
+    load_spec_audit_data,
+    save_audit_report,
+    save_cross_spec_audit_data,
+    save_spec_audit_data,
+)
 from ntt.audit.context import generate_project_brief, generate_spec_briefs
 from ntt.audit.manifest import create_manifest, read_manifest, write_manifest
 from ntt.config.loader import ConfigError, NTTConfig, load_config
@@ -79,11 +87,14 @@ def print_audit_findings_table(
 
     for finding in sorted_findings:
         style, label = SEVERITY_STYLES[finding.severity]
+        location = (
+            finding.location if isinstance(finding, AuditFinding) else "-".join(finding.specs)
+        )
         table.add_row(
             Text(label, style=f"bold {style}"),
-            finding.location if isinstance(finding, AuditFinding) else "-".join(finding.specs),
-            finding.issue,
-            finding.suggestion,
+            Text(location),
+            Text(finding.issue),
+            Text(finding.suggestion),
         )
 
     console.print(table)
@@ -123,8 +134,8 @@ def check_and_update_manifest(
     config: NTTConfig,
     smd_files: list[Path],
     amd_files: list[Path],
-) -> tuple[bool, bool]:
-    """Returns (specs_require_audit, briefs_generation_required)."""
+) -> list[str] | None:
+    """Returns changed source keys, or None if manifest unchanged."""
     config.metadata_path.mkdir(parents=True, exist_ok=True)
     manifest_path = config.metadata_path / "manifest.toml"
     new_manifest = create_manifest(config=config, smd_files=smd_files, amd_files=amd_files)
@@ -140,18 +151,43 @@ def check_and_update_manifest(
 
             if mismatched:
                 console.log("[red]Manifest changed")
-                for spec in mismatched:
-                    console.log(f"Spec {spec} has changed")
+                for source in mismatched:
+                    console.log(f"  {source} has changed")
                 write_manifest(new_manifest, filename=manifest_path)
                 console.log("Manifest updated")
+                return mismatched
             else:
                 console.log("[green]Manifest unchanged")
-                return False, False
-    else:
-        write_manifest(new_manifest, filename=manifest_path)
-        console.log("[green]Manifest written")
+                return None
 
-    return True, True
+    write_manifest(new_manifest, filename=manifest_path)
+    console.log("[green]Manifest written")
+    return list(new_manifest.sources.keys())
+
+
+def get_changed_spec_ids(
+    changed_files: list[str],
+    smd_files: list[Path],
+    amd_files: list[Path],
+    parsed_smds: list[SMDSpec],
+    parsed_amds: list[AMDSpec],
+    config: NTTConfig,
+) -> set[str]:
+    """Maps changed manifest source keys to spec IDs."""
+    if "ntt.toml" in changed_files:
+        return {smd.spec_id for smd in parsed_smds}
+
+    file_to_spec: dict[str, str] = {}
+
+    for smd_file, smd in zip(smd_files, parsed_smds):
+        key = str(smd_file).replace(str(config.root), ".")
+        file_to_spec[key] = smd.spec_id
+
+    for amd_file, amd in zip(amd_files, parsed_amds):
+        key = str(amd_file).replace(str(config.root), ".")
+        file_to_spec[key] = amd.spec_id
+
+    return {file_to_spec[f] for f in changed_files if f in file_to_spec}
 
 
 def generate_and_write_briefs(
@@ -159,6 +195,7 @@ def generate_and_write_briefs(
     status: Status,
     config: NTTConfig,
     parsed_smds: list[SMDSpec],
+    changed_spec_ids: set[str] | None = None,
 ) -> None:
     status.update("Generating project brief")
     project_brief = generate_project_brief(config=config, parsed_smds=parsed_smds)
@@ -172,7 +209,12 @@ def generate_and_write_briefs(
     console.log(f"Project brief written to [bold]{project_brief_filepath}")
 
     status.update("Generating spec briefs")
-    spec_brefs = generate_spec_briefs(config=config, parsed_smds=parsed_smds)
+    smds_to_brief = (
+        [s for s in parsed_smds if s.spec_id in changed_spec_ids]
+        if changed_spec_ids is not None
+        else parsed_smds
+    )
+    spec_brefs = generate_spec_briefs(config=config, parsed_smds=smds_to_brief)
     config.metadata_context_spec_briefs_path.mkdir(parents=True, exist_ok=True)
 
     for spec_id, brief in spec_brefs.items():
@@ -224,7 +266,7 @@ def run_audit(
         console.print("Run [cyan]ntt init[/] first to create a project.")
         raise SystemExit(1)
 
-    with Status("Spec validation") as status:
+    with Status("Spec validation", console=console) as status:
         # Quick validation
         smd_files = list(config.spec_path.glob("**/*.smd"))
         amd_files = list(config.spec_path.glob("**/*.amd"))
@@ -249,74 +291,141 @@ def run_audit(
         #     spec_graph_filepath
         # )
 
-        # Audit specs and generate audit report
-        specs_require_audit, briefs_generation_required = check_and_update_manifest(
-            console, config, smd_files, amd_files
-        )
+        # Check manifest for changes
+        changed_files = check_and_update_manifest(console, config, smd_files, amd_files)
 
-        # - SPEC AUDIT
-        if not specs_require_audit:
+        if changed_files is None:
             status.stop()
-
             if questionary.confirm(
                 "Re-audit is not required. Re-audit anyway?", default=False
             ).ask():
-                specs_require_audit = True
-
+                specs_to_audit = {smd.spec_id for smd in parsed_smds}
+            else:
+                specs_to_audit = set()
             status.start()
+        else:
+            specs_to_audit = get_changed_spec_ids(
+                changed_files, smd_files, amd_files, parsed_smds, parsed_amds, config
+            )
 
-        if specs_require_audit:
-            status.update(f"Spec audit - {config.name} v{config.version} specs")
+        # Group AMDs by spec
+        amd_by_spec: dict[str, list[AMDSpec]] = {}
+        for amd in parsed_amds:
+            amd_by_spec.setdefault(amd.spec_id, []).append(amd)
 
-            # Spec and Architecture audit
-            spec_audit_report = audit_specs(config, parsed_smds, parsed_amds)
+        # Check for missing cached files — force re-audit/re-brief if absent
+        audit_data_dir = config.metadata_path / "audits"
+        specs_missing_audit: set[str] = set()
+        specs_missing_briefs: set[str] = set()
+
+        for smd in parsed_smds:
+            if smd.spec_id not in specs_to_audit:
+                audit_json = audit_data_dir / f"{smd.spec_id}.json"
+                if not audit_json.exists():
+                    specs_missing_audit.add(smd.spec_id)
+
+            brief_file = config.metadata_context_spec_briefs_path / f"{smd.spec_id}.md"
+            if not brief_file.exists():
+                specs_missing_briefs.add(smd.spec_id)
+
+        if specs_missing_audit:
+            console.log(
+                f"[yellow]Missing audit data for: {', '.join(sorted(specs_missing_audit))}. "
+                "Will re-audit."
+            )
+            specs_to_audit |= specs_missing_audit
+
+        project_brief_file = config.metadata_context_path / "project-brief.md"
+        if not project_brief_file.exists():
+            specs_missing_briefs |= {smd.spec_id for smd in parsed_smds}
+
+        if specs_missing_briefs - specs_to_audit:
+            console.log(
+                f"[yellow]Missing briefs for: "
+                f"{', '.join(sorted(specs_missing_briefs - specs_to_audit))}. "
+                "Will regenerate."
+            )
+
+        # - PER-SPEC AUDIT
+        spec_reports: dict[str, SpecAuditReport] = {}
+        audited_spec_ids: set[str] = set()
+
+        for smd in parsed_smds:
+            spec_amds = amd_by_spec.get(smd.spec_id)
+
+            if smd.spec_id in specs_to_audit:
+                status.update(f"Auditing {smd.spec_id} - {smd.title}")
+                report = audit_spec(config, smd, spec_amds)
+                save_spec_audit_data(report, smd.spec_id, audit_data_dir)
+                spec_reports[smd.spec_id] = report
+                audited_spec_ids.add(smd.spec_id)
+
+                counts = {s: 0 for s in Severity}
+                for finding in report.findings:
+                    counts[finding.severity] += 1
+                summary = ", ".join(f"{v} {k.value}(s)" for k, v in counts.items() if v > 0)
+                console.log(f"  {smd.spec_id}: {summary or 'no findings'}")
+            else:
+                cached = load_spec_audit_data(smd.spec_id, audit_data_dir)
+                if cached:
+                    spec_reports[smd.spec_id] = cached
+                    console.log(f"  {smd.spec_id} - {smd.title}: [dim](cached)[/dim]")
+
+        # Present findings for freshly audited specs
+        if audited_spec_ids:
+            fresh_findings = SpecAuditReport(
+                findings=[
+                    f
+                    for sid in audited_spec_ids
+                    if sid in spec_reports
+                    for f in spec_reports[sid].findings
+                ]
+            )
 
             print_audit_summary(
                 console,
-                report=spec_audit_report,
+                report=fresh_findings,
                 title=f"{config.name} v{config.version} - Spec Audit",
             )
 
-            audit_report_filepath = config.metadata_path / "audit-report.md"
+            present_findings_and_confirm(console, status, fresh_findings)
 
-            save_audit_report(
-                report=spec_audit_report,
-                name=f"{config.name} v{config.version}",
-                spec_ids=[smd.spec_id for smd in parsed_smds],
-                filename=audit_report_filepath,
-            )
+        # - CROSS-SPEC AUDIT
+        cross_spec_report: CrossSpecAuditReport | None = None
 
-            console.log(f"Spec audit report saved to [bold]{audit_report_filepath}")
-
-            present_findings_and_confirm(console, status, spec_audit_report)
-
-            # Cross spec audit
-            if len(parsed_smds) > 1:
-                status.update(f"Cross-spec audit - {config.name} v{config.version} specs")
-                cross_spec_audit_report = audit_cross_specs(config, parsed_smds, parsed_amds)
+        if len(parsed_smds) > 1:
+            if audited_spec_ids:
+                status.update(f"Cross-spec audit - {config.name} v{config.version}")
+                cross_spec_report = audit_cross_specs(config, parsed_smds, parsed_amds)
+                save_cross_spec_audit_data(cross_spec_report, audit_data_dir)
 
                 print_audit_summary(
                     console,
-                    report=cross_spec_audit_report,
-                    title=f"{config.name} v{config.version} - Spec Audit",
+                    report=cross_spec_report,
+                    title=f"{config.name} v{config.version} - Cross-Spec Audit",
                 )
 
-                cross_audit_report_filepath = config.metadata_path / "cross-audit-report.md"
+                present_findings_and_confirm(console, status, cross_spec_report)
+            else:
+                cross_spec_report = load_cross_spec_audit_data(audit_data_dir)
 
-                save_audit_report(
-                    report=cross_spec_audit_report,
-                    name=f"{config.name} v{config.version}",
-                    spec_ids=[smd.spec_id for smd in parsed_smds],
-                    filename=cross_audit_report_filepath,
-                )
-
-                console.log(f"Cross spec audit report saved to [bold]{cross_audit_report_filepath}")
-
-                present_findings_and_confirm(console, status, cross_spec_audit_report)
+        # - WRITE UNIFIED AUDIT REPORT
+        if spec_reports:
+            audit_report_filepath = config.metadata_path / "audit-report.md"
+            save_audit_report(
+                spec_reports=spec_reports,
+                cross_spec_report=cross_spec_report,
+                name=f"{config.name} v{config.version}",
+                filename=audit_report_filepath,
+            )
+            console.log(f"Audit report saved to [bold]{audit_report_filepath}")
 
         # - BRIEFS GENERATION
-        if briefs_generation_required:
-            generate_and_write_briefs(console, status, config, parsed_smds)
+        specs_needing_briefs = audited_spec_ids | specs_missing_briefs
+        if specs_needing_briefs:
+            generate_and_write_briefs(
+                console, status, config, parsed_smds, changed_spec_ids=specs_needing_briefs
+            )
         else:
             console.log("[yellow]Project and spec brief regeneration not required")
 

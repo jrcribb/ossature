@@ -33,7 +33,7 @@ def create_manifest(config: NTTConfig, smd_files: list[Path], amd_files: list[Pa
     for amd_file in amd_files:
         amd_checksum = _file_checksum(amd_file)
 
-        amd_filename = str(amd_file).replace(str(config.root), "")
+        amd_filename = str(amd_file).replace(str(config.root), ".")
         sources[amd_filename] = f"{CHECKSUM_ALGO}:{amd_checksum}"
 
     # Checksum for root config

@@ -6,7 +6,7 @@ from pydantic_ai import Agent
 
 from ntt.config.loader import NTTConfig
 from ntt.models.amd import AMDSpec
-from ntt.models.audit import CrossSpecAuditReport, CrossSpecFinding, SpecAuditReport
+from ntt.models.audit import CrossSpecAuditReport, SpecAuditReport
 from ntt.models.smd import SMDSpec
 from ntt.renderer.amd import render_amd
 from ntt.renderer.smd import render_smd
@@ -16,8 +16,8 @@ SPEC_AUDIT_MODEL: Final[str] = "claude-opus-4-6"
 SPEC_AUDIT_SYSTEM_PROMPT: Final[str] = (
     "You are a senior technical reviewer auditing a software specification "
     "for a {language} project.\n\n"
-    "You will receive one or more SMD (Spec Markdown) files, and optionally "
-    "AMD (Architecture Markdown) files that provide structural detail for specs.\n\n"
+    "You will receive an SMD (Spec Markdown) file, and optionally "
+    "AMD (Architecture Markdown) files that provide structural detail for the spec.\n\n"
     "## What to Flag\n"
     "1. CONTRADICTION — requirements that conflict with each other\n"
     "2. AMBIGUITY — requirements where two reasonable interpretations would "
@@ -33,7 +33,6 @@ SPEC_AUDIT_SYSTEM_PROMPT: Final[str] = (
     "- Missing details that have standard or reasonably obvious solutions in {language}\n"
     "- Underspecification where any reasonable choice produces acceptable behavior\n"
     "- Behavior that can be inferred from the examples provided\n"
-    "- Behavior that can be inferred from the other spec files\n"
     "- Stylistic preferences (naming, formatting, code organization)\n"
     "- Things that would be documented in an Architecture file when no AMD is provided\n"
     "- Missing AMD — specs without architecture files are valid; "
@@ -93,10 +92,10 @@ CROSS_SPEC_AUDIT_SYSTEM_PROMPT: Final[str] = (
 )
 
 
-def audit_specs(
+def audit_spec(
     config: NTTConfig,
-    parsed_smds: list[SMDSpec],
-    parsed_amds: list[AMDSpec] | None = None,
+    smd: SMDSpec,
+    amds: list[AMDSpec] | None = None,
 ) -> SpecAuditReport:
     agent = Agent(
         SPEC_AUDIT_MODEL,
@@ -104,28 +103,15 @@ def audit_specs(
         system_prompt=SPEC_AUDIT_SYSTEM_PROMPT.format(language=config.output.language),
     )
 
-    # Build the audit input: all SMDs, then all AMDs grouped by their parent spec
     sections: list[str] = []
 
-    # Add all SMD content
-    sections.append("# Specifications (SMD)\n")
-    for smd in parsed_smds:
-        sections.append(render_smd(smd))
+    sections.append("# Specification (SMD)\n")
+    sections.append(render_smd(smd))
 
-    # Add AMD content if present, grouped by spec
-    if parsed_amds:
+    if amds:
         sections.append("\n# Architecture Documents (AMD)\n")
-
-        # Group AMDs by their spec_id
-        amd_by_spec: dict[str, list[AMDSpec]] = {}
-        for amd in parsed_amds:
-            amd_by_spec.setdefault(amd.spec_id, []).append(amd)
-
-        for spec_id, amds in amd_by_spec.items():
-            sections.append(f"\n## Architecture for {spec_id}\n")
-
-            for amd in amds:
-                sections.append(render_amd(amd))
+        for amd in amds:
+            sections.append(render_amd(amd))
 
     result = agent.run_sync("\n---\n".join(sections))
 
@@ -216,35 +202,64 @@ def audit_cross_specs(
     return result.output
 
 
+def save_spec_audit_data(report: SpecAuditReport, spec_id: str, audit_dir: Path) -> None:
+    audit_dir.mkdir(parents=True, exist_ok=True)
+    filepath = audit_dir / f"{spec_id}.json"
+    filepath.write_text(report.model_dump_json(indent=2))
+
+
+def load_spec_audit_data(spec_id: str, audit_dir: Path) -> SpecAuditReport | None:
+    filepath = audit_dir / f"{spec_id}.json"
+    if not filepath.exists():
+        return None
+    return SpecAuditReport.model_validate_json(filepath.read_text())
+
+
+def save_cross_spec_audit_data(report: CrossSpecAuditReport, audit_dir: Path) -> None:
+    audit_dir.mkdir(parents=True, exist_ok=True)
+    filepath = audit_dir / "cross-spec.json"
+    filepath.write_text(report.model_dump_json(indent=2))
+
+
+def load_cross_spec_audit_data(audit_dir: Path) -> CrossSpecAuditReport | None:
+    filepath = audit_dir / "cross-spec.json"
+    if not filepath.exists():
+        return None
+    return CrossSpecAuditReport.model_validate_json(filepath.read_text())
+
+
 def save_audit_report(
-    report: SpecAuditReport | CrossSpecAuditReport,
+    spec_reports: dict[str, SpecAuditReport],
+    cross_spec_report: CrossSpecAuditReport | None,
     name: str,
-    spec_ids: list[str],
     filename: Path,
 ) -> None:
     with open(filename, "w") as f:
-        title = (
-            "Cross-Spec Audit Report"
-            if isinstance(report, CrossSpecAuditReport)
-            else "Audit Report"
-        )
-
-        f.write(f"# {title}: {name}\n\n")
+        f.write(f"# Audit Report: {name}\n\n")
 
         current_time_utc = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
         f.write(f"**Date:** {current_time_utc}\n")
-        f.write(f"**Specs:** {', '.join(spec_ids)}\n\n")
+        f.write(f"**Specs:** {', '.join(spec_reports.keys())}\n\n")
 
-        if not report.findings:
-            f.write("No findings identified.\n")
-            return
-
-        for finding in report.findings:
-            if isinstance(finding, CrossSpecFinding):
-                location = " <-> ".join(finding.specs)
+        if cross_spec_report:
+            f.write("## Cross-Spec Findings\n\n")
+            if cross_spec_report.findings:
+                for finding in cross_spec_report.findings:
+                    location = " <-> ".join(finding.specs)
+                    f.write(f"### {finding.severity.value.upper()}: {location}\n\n")
+                    f.write(f"**Issue:** {finding.issue}\n\n")
+                    f.write(f"**Suggestion:** {finding.suggestion}\n\n")
             else:
-                location = finding.location
+                f.write("No cross-spec findings identified.\n\n")
 
-            f.write(f"## {finding.severity.value.upper()}: {location}\n\n")
-            f.write(f"**Issue:** {finding.issue}\n\n")
-            f.write(f"**Suggestion:** {finding.suggestion}\n\n")
+        for spec_id, report in spec_reports.items():
+            f.write(f"## {spec_id} Findings\n\n")
+            if report.findings:
+                for spec_finding in report.findings:
+                    f.write(
+                        f"### {spec_finding.severity.value.upper()}: {spec_finding.location}\n\n"
+                    )
+                    f.write(f"**Issue:** {spec_finding.issue}\n\n")
+                    f.write(f"**Suggestion:** {spec_finding.suggestion}\n\n")
+            else:
+                f.write("No findings identified.\n\n")
