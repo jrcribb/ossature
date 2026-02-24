@@ -11,7 +11,7 @@ from rich.text import Text
 from ntt.audit.audit import audit_cross_specs, audit_specs, save_audit_report
 from ntt.audit.context import generate_project_brief, generate_spec_briefs
 from ntt.audit.manifest import create_manifest, read_manifest, write_manifest
-from ntt.config.loader import ConfigError, load_config
+from ntt.config.loader import ConfigError, NTTConfig, load_config
 from ntt.models.amd import AMDSpec
 from ntt.models.audit import (
     AuditFinding,
@@ -90,6 +90,101 @@ def print_audit_findings_table(
     console.print()
 
 
+def present_findings_and_confirm(
+    console: Console,
+    status: Status,
+    report: SpecAuditReport | CrossSpecAuditReport,
+) -> None:
+    counts = {s: 0 for s in Severity}
+    for finding in report.findings:
+        counts[finding.severity] += 1
+
+    if not any(v > 0 for v in counts.values()):
+        return
+
+    status.stop()
+
+    if questionary.confirm("Print full report?").ask():
+        print_audit_findings_table(console, report=report)
+
+    severity_counts = ", ".join(f"{v} {k.value}(s)" for k, v in counts.items() if v > 0)
+    confirm_default = counts[Severity.ERROR] == 0
+
+    if not questionary.confirm(
+        f"Audit found {severity_counts}. Continue?", default=confirm_default
+    ).ask():
+        raise SystemExit(1)
+
+    status.start()
+
+
+def check_and_update_manifest(
+    console: Console,
+    config: NTTConfig,
+    smd_files: list[Path],
+    amd_files: list[Path],
+) -> tuple[bool, bool]:
+    """Returns (specs_require_audit, briefs_generation_required)."""
+    config.metadata_path.mkdir(parents=True, exist_ok=True)
+    manifest_path = config.metadata_path / "manifest.toml"
+    new_manifest = create_manifest(config=config, smd_files=smd_files, amd_files=amd_files)
+
+    if manifest_path.exists():
+        console.log("Reading existing manifest")
+        manifest = read_manifest(manifest_path)
+
+        if not manifest:
+            console.log("Malformed manifest. Disregarding.")
+        else:
+            mismatched = new_manifest.diff(other=manifest)
+
+            if mismatched:
+                console.log("[red]Manifest changed")
+                for spec in mismatched:
+                    console.log(f"Spec {spec} has changed")
+                write_manifest(new_manifest, filename=manifest_path)
+                console.log("Manifest updated")
+            else:
+                console.log("[green]Manifest unchanged")
+                return False, False
+    else:
+        write_manifest(new_manifest, filename=manifest_path)
+        console.log("[green]Manifest written")
+
+    return True, True
+
+
+def generate_and_write_briefs(
+    console: Console,
+    status: Status,
+    config: NTTConfig,
+    parsed_smds: list[SMDSpec],
+) -> None:
+    status.update("Generating project brief")
+    project_brief = generate_project_brief(config=config, parsed_smds=parsed_smds)
+
+    config.metadata_context_path.mkdir(parents=True, exist_ok=True)
+    project_brief_filepath = config.metadata_context_path / "project-brief.md"
+    with open(project_brief_filepath, "w") as f:
+        f.write(project_brief.brief)
+        f.flush()
+
+    console.log(f"Project brief written to [bold]{project_brief_filepath}")
+
+    status.update("Generating spec briefs")
+    spec_brefs = generate_spec_briefs(config=config, parsed_smds=parsed_smds)
+    config.metadata_context_spec_briefs_path.mkdir(parents=True, exist_ok=True)
+
+    for spec_id, brief in spec_brefs.items():
+        spec_brief_filepath = config.metadata_context_spec_briefs_path / f"{spec_id}.md"
+        with open(spec_brief_filepath, "w") as f:
+            f.write(brief.brief)
+            f.flush()
+        console.log(f"Spec brief written to [bold]{spec_brief_filepath}")
+
+    status.stop()
+
+
 def quick_validate(
     smd_files: list[Path], amd_files: list[Path]
 ) -> tuple[list[SMDSpec], list[AMDSpec]]:
@@ -155,43 +250,9 @@ def run_audit(
         # )
 
         # Audit specs and generate audit report
-        config.metadata_path.mkdir(parents=True, exist_ok=True)
-        manifest_path = config.metadata_path / "manifest.toml"
-        new_manifest = create_manifest(config=config, smd_files=smd_files, amd_files=amd_files)
-
-        specs_require_audit = True
-        briefs_generation_required = True
-
-        # if the manifest exists, check for mismatch
-        # then update it. Mismatched checksums require re-audit
-
-        if manifest_path.exists():
-            console.log("Reading existing manifest")
-            manifest = read_manifest(manifest_path)
-
-            if not manifest:
-                console.log("Malformed manifest. Disregarding.")
-            else:
-                mismatched = new_manifest.diff(other=manifest)
-
-                if mismatched:
-                    console.log("[red]Manifest changed")
-
-                    for spec in mismatched:
-                        console.log(f"Spec {spec} has changed")
-
-                    write_manifest(new_manifest, filename=manifest_path)
-                    console.log("Manifest updated")
-                else:
-                    specs_require_audit = False
-                    briefs_generation_required = False
-                    console.log("[green]Manifest unchanged")
-
-        else:
-            write_manifest(new_manifest, filename=manifest_path)
-            console.log("[green]Manifest written")
-
-            manifest = new_manifest
+        specs_require_audit, briefs_generation_required = check_and_update_manifest(
+            console, config, smd_files, amd_files
+        )
 
         # - SPEC AUDIT
         if not specs_require_audit:
@@ -227,27 +288,9 @@ def run_audit(
 
             console.log(f"Spec audit report saved to [bold]{audit_report_filepath}")
 
-            counts = {s: 0 for s in Severity}
-            for _spec_finding in spec_audit_report.findings:
-                counts[_spec_finding.severity] += 1
+            present_findings_and_confirm(console, status, spec_audit_report)
 
-            if any(v > 0 for _, v in counts.items()):
-                status.stop()
-                if questionary.confirm("Print full report?").ask():
-                    print_audit_findings_table(console, report=spec_audit_report)
-
-                severity_counts = ", ".join(f"{v} {k.value}(s)" for k, v in counts.items() if v > 0)
-
-                confirm_default = counts[Severity.ERROR] == 0
-
-                if not questionary.confirm(
-                    f"Audit found {severity_counts}. Continue?", default=confirm_default
-                ).ask():
-                    raise SystemExit(1)
-
-                status.start()
-
-            # Cross spec audt
+            # Cross spec audit
             if len(parsed_smds) > 1:
                 status.update(f"Cross-spec audit - {config.name} v{config.version} specs")
                 cross_spec_audit_report = audit_cross_specs(config, parsed_smds, parsed_amds)
@@ -269,60 +312,11 @@ def run_audit(
 
                 console.log(f"Cross spec audit report saved to [bold]{cross_audit_report_filepath}")
 
-                counts = {s: 0 for s in Severity}
-
-                for _cs_finding in cross_spec_audit_report.findings:
-                    counts[_cs_finding.severity] += 1
-
-                if any(v > 0 for _, v in counts.items()):
-                    status.stop()
-                    if questionary.confirm("Print full report?").ask():
-                        print_audit_findings_table(console, report=cross_spec_audit_report)
-
-                    severity_counts = ", ".join(
-                        f"{v} {k.value}(s)" for k, v in counts.items() if v > 0
-                    )
-
-                    confirm_default = counts[Severity.ERROR] == 0
-
-                    if not questionary.confirm(
-                        f"Audit found {severity_counts}. Continue?", default=confirm_default
-                    ).ask():
-                        raise SystemExit(1)
-
-                    status.start()
+                present_findings_and_confirm(console, status, cross_spec_audit_report)
 
         # - BRIEFS GENERATION
         if briefs_generation_required:
-            # -- Create context files: Project brief
-            status.update("Generating project brief")
-            project_brief = generate_project_brief(config=config, parsed_smds=parsed_smds)
-
-            config.metadata_context_path.mkdir(parents=True, exist_ok=True)
-
-            project_brief_filepath = config.metadata_context_path / "project-brief.md"
-            with open(project_brief_filepath, "w") as f:
-                f.write(project_brief.brief)
-                f.flush()
-
-            console.log(f"Project brief written to [bold]{project_brief_filepath}")
-
-            # - Create context files: Spec briefs
-            status.update("Generating spec briefs")
-
-            spec_brefs = generate_spec_briefs(config=config, parsed_smds=parsed_smds)
-            config.metadata_context_spec_briefs_path.mkdir(parents=True, exist_ok=True)
-
-            for spec_id, brief in spec_brefs.items():
-                spec_brief_filepath = config.metadata_context_spec_briefs_path / f"{spec_id}.md"
-
-                with open(spec_brief_filepath, "w") as f:
-                    f.write(brief.brief)
-                    f.flush()
-
-                console.log(f"Project brief written to [bold]{spec_brief_filepath}")
-
-            status.stop()
+            generate_and_write_briefs(console, status, config, parsed_smds)
         else:
             console.log("[yellow]Project and spec brief regeneration not required")
 
