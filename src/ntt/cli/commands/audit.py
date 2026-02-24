@@ -18,6 +18,7 @@ from ntt.audit.audit import (
     save_spec_audit_data,
 )
 from ntt.audit.context import generate_project_brief, generate_spec_briefs
+from ntt.audit.graph import build_spec_graph, write_spec_graph
 from ntt.audit.manifest import create_manifest, read_manifest, write_manifest
 from ntt.config.loader import ConfigError, NTTConfig, load_config
 from ntt.models.amd import AMDSpec
@@ -106,24 +107,27 @@ def present_findings_and_confirm(
     status: Status,
     report: SpecAuditReport | CrossSpecAuditReport,
 ) -> None:
+
+    if not report.findings:
+        return
+
     counts = {s: 0 for s in Severity}
     for finding in report.findings:
         counts[finding.severity] += 1
-
-    if not any(v > 0 for v in counts.values()):
-        return
 
     status.stop()
 
     if questionary.confirm("Print full report?").ask():
         print_audit_findings_table(console, report=report)
 
-    severity_counts = ", ".join(f"{v} {k.value}(s)" for k, v in counts.items() if v > 0)
-    confirm_default = counts[Severity.ERROR] == 0
+    some_errors = counts[Severity.ERROR] > 0
 
-    if not questionary.confirm(
-        f"Audit found {severity_counts}. Continue?", default=confirm_default
-    ).ask():
+    if (
+        some_errors
+        and questionary.confirm(
+            f"Audit found {counts[Severity.ERROR]} error(s). Continue?", default=False
+        ).ask()
+    ):
         raise SystemExit(1)
 
     status.start()
@@ -283,13 +287,11 @@ def run_audit(
 
         console.log("[green]✓ specs valid")
 
-        # TODO: Generate graph.toml
-        # graph = build_spec_graph(parsed_smds, parsed_amds)
-        # spec_graph_filepath = config.metadata_path / "graph.toml"
-        # write_spec_graph(
-        #     graph,
-        #     spec_graph_filepath
-        # )
+        # Generate graph.toml
+        graph = build_spec_graph(parsed_smds, parsed_amds, smd_files, amd_files, config.root)
+        spec_graph_filepath = config.metadata_path / "graph.toml"
+        write_spec_graph(graph, spec_graph_filepath)
+        console.log(f"Spec graph written to [bold]{spec_graph_filepath}")
 
         # Check manifest for changes
         changed_files = check_and_update_manifest(console, config, smd_files, amd_files)
