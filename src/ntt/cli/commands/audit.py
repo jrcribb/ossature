@@ -19,6 +19,11 @@ from ntt.audit.audit import (
 )
 from ntt.audit.context import generate_project_brief, generate_spec_briefs
 from ntt.audit.graph import build_spec_graph, write_spec_graph
+from ntt.audit.interfaces import (
+    extract_interface_from_amds,
+    infer_interface_from_smd,
+    propagate_to_smd_dependents,
+)
 from ntt.audit.manifest import create_manifest, read_manifest, write_manifest
 from ntt.config.loader import ConfigError, NTTConfig, load_config
 from ntt.models.amd import AMDSpec
@@ -231,6 +236,57 @@ def generate_and_write_briefs(
     status.stop()
 
 
+def generate_and_write_interfaces(
+    console: Console,
+    config: NTTConfig,
+    parsed_smds: list[SMDSpec],
+    amd_by_spec: dict[str, list[AMDSpec]],
+    changed_spec_ids: set[str],
+    topo_levels: list[list[str]],
+) -> None:
+    config.metadata_context_interfaces_path.mkdir(parents=True, exist_ok=True)
+
+    # Load cached interfaces for unchanged specs (needed as dependency context)
+    interfaces: dict[str, str] = {}
+    for smd in parsed_smds:
+        if smd.spec_id not in changed_spec_ids:
+            cached = config.metadata_context_interfaces_path / f"{smd.spec_id}.md"
+            if cached.exists():
+                interfaces[smd.spec_id] = cached.read_text()
+
+    smd_map = {smd.spec_id: smd for smd in parsed_smds}
+
+    for level in topo_levels:
+        for spec_id in level:
+            if spec_id not in changed_spec_ids:
+                continue
+
+            smd = smd_map[spec_id]
+            amds = amd_by_spec.get(spec_id)
+
+            if amds:
+                console.log(f"Extracting interface for {spec_id} (from AMD)")
+                interface = extract_interface_from_amds(spec_id, amds, config.output.language)
+            else:
+                console.log(f"Inferring interface for {spec_id} (from SMD)")
+                dep_interfaces = {
+                    dep_id: interfaces[dep_id] for dep_id in smd.depends if dep_id in interfaces
+                }
+                interface = infer_interface_from_smd(
+                    config, smd, dep_interfaces if dep_interfaces else None
+                )
+
+            interfaces[spec_id] = interface
+
+            filepath = config.metadata_context_interfaces_path / f"{spec_id}.md"
+            with open(filepath, "w") as f:
+                f.write(interface)
+                f.flush()
+
+            source = "AMD" if amds else "LLM"
+            console.log(f"  Written to [bold]{filepath}[/bold] ({source})")
+
+
 def quick_validate(
     smd_files: list[Path], amd_files: list[Path]
 ) -> tuple[list[SMDSpec], list[AMDSpec]]:
@@ -315,10 +371,12 @@ def run_audit(
         for amd in parsed_amds:
             amd_by_spec.setdefault(amd.spec_id, []).append(amd)
 
-        # Check for missing cached files — force re-audit/re-brief if absent
+        status.update("Checking cached artifacts")
+        # Check for missing cached files — force re-audit/re-brief/re-interface if absent
         audit_data_dir = config.metadata_path / "audits"
         specs_missing_audit: set[str] = set()
         specs_missing_briefs: set[str] = set()
+        specs_missing_interfaces: set[str] = set()
 
         for smd in parsed_smds:
             if smd.spec_id not in specs_to_audit:
@@ -329,6 +387,10 @@ def run_audit(
             brief_file = config.metadata_context_spec_briefs_path / f"{smd.spec_id}.md"
             if not brief_file.exists():
                 specs_missing_briefs.add(smd.spec_id)
+
+            interface_file = config.metadata_context_interfaces_path / f"{smd.spec_id}.md"
+            if not interface_file.exists():
+                specs_missing_interfaces.add(smd.spec_id)
 
         if specs_missing_audit:
             console.log(
@@ -345,6 +407,13 @@ def run_audit(
             console.log(
                 f"[yellow]Missing briefs for: "
                 f"{', '.join(sorted(specs_missing_briefs - specs_to_audit))}. "
+                "Will regenerate."
+            )
+
+        if specs_missing_interfaces:
+            console.log(
+                f"[yellow]Missing interfaces for: "
+                f"{', '.join(sorted(specs_missing_interfaces))}. "
                 "Will regenerate."
             )
 
@@ -431,8 +500,26 @@ def run_audit(
         else:
             console.log("[yellow]Project and spec brief regeneration not required")
 
-        # - TODO: Generate Interfaces
-        # generate_interfaces(config, parsed_smds, parsed_amds)
+        # - GENERATE INTERFACES
+        specs_needing_interfaces = audited_spec_ids | specs_missing_interfaces
+        specs_needing_interfaces = propagate_to_smd_dependents(
+            specs_needing_interfaces, parsed_smds, amd_by_spec
+        )
+
+        if specs_needing_interfaces:
+            status.update("Generating interfaces")
+            status.start()
+            generate_and_write_interfaces(
+                console,
+                config,
+                parsed_smds,
+                amd_by_spec,
+                changed_spec_ids=specs_needing_interfaces,
+                topo_levels=graph.levels,
+            )
+            status.stop()
+        else:
+            console.log("[yellow]Interface regeneration not required")
 
         # - TODO: GENERATE OR UPDATE PLAN
         # plan = generate_plan(config, parsed_smds, parsed_amds, graph)
