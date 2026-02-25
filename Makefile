@@ -5,7 +5,7 @@ lint:
 	uv run ruff format --check src/ tests/
 
 format:
-	uv run ruff check --fix src/
+	uv run ruff check --fix src/ tests/
 	uv run ruff format src/ tests/
 
 typecheck:

@@ -1,31 +1,10 @@
-from typing import Final
-
 from pydantic_ai import Agent
 
+from ntt.audit.prompts import INTERFACE_INFERENCE_MODEL, INTERFACE_INFERENCE_SYSTEM_PROMPT
 from ntt.config.loader import NTTConfig
 from ntt.models.amd import AMDSpec
 from ntt.models.smd import SMDSpec
 from ntt.renderer.smd import render_smd
-
-INTERFACE_INFERENCE_MODEL: Final[str] = "anthropic:claude-sonnet-4-6"
-
-INTERFACE_INFERENCE_SYSTEM_PROMPT: Final[str] = (
-    "You are a senior {language} architect. Given a software specification (SMD), "
-    "design the public interface surface that this module will expose.\n\n"
-    "Output a markdown document containing:\n"
-    "- Module/file structure with paths\n"
-    "- All public types, structs/classes, enums with their fields\n"
-    "- All public function/method signatures with types\n"
-    "- Error types\n\n"
-    "Write interfaces in idiomatic {language} using fenced code blocks.\n"
-    "Organize by component with clear headers.\n\n"
-    "Do NOT include:\n"
-    "- Implementation bodies (use `...` or `pass`)\n"
-    "- Private/internal types\n"
-    "- Tests or build configuration\n\n"
-    "This document serves as the contract for dependent modules.\n"
-    "Output only the interface document."
-)
 
 
 def extract_interface_from_amds(

@@ -1,14 +1,10 @@
-from typing import Final
-
 from pydantic_ai import Agent
 
+from ntt.audit.prompts import PROJECT_BRIEF_MODEL, SPEC_BRIEF_MODEL
 from ntt.config.loader import NTTConfig
 from ntt.models.audit import Brief
 from ntt.models.smd import SMDSpec
 from ntt.renderer.smd import render_smd
-
-PROJECT_BRIEF_MODEL: Final[str] = "anthropic:claude-sonnet-4-6"
-SPEC_BRIEF_MODEL: Final[str] = "anthropic:claude-sonnet-4-6"
 
 
 def format_smd_specs_overviews(specs: list[SMDSpec]) -> str:
