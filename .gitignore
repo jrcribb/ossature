@@ -14,3 +14,12 @@ wheels/
 *~
 
 skip_this/
+
+htmlcov/
+.coverage
+.coverage.*
+.cache
+coverage.xml
+*.cover
+*.py,cover
+.pytest_cache/
