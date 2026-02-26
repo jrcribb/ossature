@@ -25,6 +25,8 @@ from ntt.audit.interfaces import (
     propagate_to_smd_dependents,
 )
 from ntt.audit.manifest import create_manifest, read_manifest, write_manifest
+from ntt.audit.planner import generate_plan, write_plan
+from ntt.cli.decorators import requires_llm
 from ntt.config.loader import ConfigError, NTTConfig, load_config
 from ntt.models.amd import AMDSpec
 from ntt.models.audit import (
@@ -314,10 +316,12 @@ def quick_validate(
     return parsed_smds, parsed_amds
 
 
+@requires_llm
 def run_audit(
     config_path: Path,
     verbose: bool,
     console: Console,
+    replan: bool = False,
 ) -> None:
     try:
         config = load_config(config_path)
@@ -521,7 +525,50 @@ def run_audit(
         else:
             console.log("[yellow]Interface regeneration not required")
 
-        # - TODO: GENERATE OR UPDATE PLAN
-        # plan = generate_plan(config, parsed_smds, parsed_amds, graph)
-        # plan_filepath = config.metadata_path / "plan.toml"
-        # write_plan(plan, plan_filepath)
+        # - GENERATE BUILD PLAN
+        plan_filepath = config.metadata_path / "plan.toml"
+        needs_plan = bool(audited_spec_ids) or not plan_filepath.exists() or replan
+
+        if replan and plan_filepath.exists():
+            status.stop()
+            if not questionary.confirm(
+                "This will overwrite the existing plan (discarding manual edits). Continue?",
+                default=False,
+            ).ask():
+                console.print("[yellow]Plan regeneration skipped.")
+                return
+            status.start()
+
+        if not needs_plan:
+            console.log("[yellow]Plan regeneration not required")
+        else:
+            status.update("Generating build plan")
+            status.start()
+
+            plan = generate_plan(
+                config=config,
+                parsed_smds=parsed_smds,
+                amd_by_spec=amd_by_spec,
+                graph=graph,
+                spec_reports=spec_reports,
+            )
+
+            write_plan(plan, plan_filepath)
+            console.log(f"Build plan written to [bold]{plan_filepath}")
+
+            status.stop()
+
+            console.print()
+            console.print(
+                Panel(
+                    f"[bold]{plan.meta.total_tasks}[/bold] tasks planned across "
+                    f"[bold]{len(plan.meta.specs)}[/bold] spec(s)",
+                    title=f"[bold]{config.name} v{config.version} — Build Plan[/bold]",
+                    expand=False,
+                    box=box.ROUNDED,
+                )
+            )
+            console.print()
+            console.print(f"  Review the plan:  [cyan]{plan_filepath}[/cyan]")
+            console.print("  Start building:   [cyan]ntt build[/cyan]")
+            console.print()

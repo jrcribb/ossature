@@ -100,9 +100,15 @@ def validate(
 
 
 @cli.command()
+@click.option(
+    "--replan",
+    is_flag=True,
+    help="Regenerate the build plan (discards manual edits to plan.toml)",
+)
 @click.pass_context
 def audit(
     ctx: click.Context,
+    replan: bool,
 ) -> None:
     """Semantically audit the specifications and generate plan metadata."""
     from ntt.cli.commands.audit import run_audit
@@ -111,4 +117,5 @@ def audit(
         config_path=ctx.obj["config_path"],
         verbose=ctx.obj["verbose"],
         console=ctx.obj["console"],
+        replan=replan,
     )

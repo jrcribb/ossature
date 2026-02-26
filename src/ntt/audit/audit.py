@@ -158,6 +158,7 @@ def save_audit_report(
     name: str,
     filename: Path,
 ) -> None:
+    filename.parent.mkdir(parents=True, exist_ok=True)
     with open(filename, "w") as f:
         f.write(f"# Audit Report: {name}\n\n")
 

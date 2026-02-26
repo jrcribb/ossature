@@ -6,6 +6,7 @@ SPEC_AUDIT_MODEL: Final[str] = "claude-opus-4-6"
 PROJECT_BRIEF_MODEL: Final[str] = "anthropic:claude-sonnet-4-6"
 SPEC_BRIEF_MODEL: Final[str] = "anthropic:claude-sonnet-4-6"
 INTERFACE_INFERENCE_MODEL: Final[str] = "anthropic:claude-sonnet-4-6"
+PLANNER_MODEL: Final[str] = "anthropic:claude-sonnet-4-6"
 
 # Prompts
 
@@ -85,6 +86,39 @@ CROSS_SPEC_AUDIT_SYSTEM_PROMPT: Final[str] = (
     ' "issue": "description",'
     ' "suggestion": "how to fix"}}\n\n'
     "Output a JSON array of findings. Empty array if none found."
+)
+
+PLAN_GENERATION_SYSTEM_PROMPT: Final[str] = (
+    "You are a build planner for an LLM-driven code generation system.\n\n"
+    "Given a specification (SMD) and optional architecture (AMD) for a {language} project, "
+    "produce an ordered task list where each task:\n"
+    "- Produces 1-3 files maximum\n"
+    "- Has a clear, single responsibility\n"
+    "- Includes a verification command (compile/lint check) appropriate for {language}\n"
+    "- Lists which spec sections are relevant (spec_refs — use section header text, e.g. "
+    '"overview", "List Available Defaults", "Constraints")\n'
+    "- Lists which architecture sections are relevant (arch_refs — use section header text, e.g. "
+    '"dependencies", "Components > RegistryManager")\n'
+    "- Lists which previously-generated files from earlier tasks in this spec it needs "
+    "to see (depends_on — use 1-based task indices within this spec)\n\n"
+    "Task ordering rules:\n"
+    "1. Scaffold first (project structure, build config, module declarations)\n"
+    "2. Data models / types before components that use them\n"
+    "3. Respect component dependency order from AMD (if provided)\n"
+    "4. Tests immediately after each component\n"
+    "5. Integration tests after all components\n\n"
+    "If audit findings are provided, account for them in your planning — "
+    "avoid generating tasks that would hit known spec issues.\n\n"
+    "Output the tasks as a structured list. Each task needs:\n"
+    "- title: short descriptive name\n"
+    "- description: what this task produces and why\n"
+    "- outputs: list of file paths this task will create\n"
+    "- depends_on: list of 1-based task indices within this spec that must complete first "
+    "(empty list for the first task)\n"
+    "- spec_refs: list of spec section names relevant to this task\n"
+    "- arch_refs: list of architecture section names relevant to this task "
+    "(empty if no AMD provided)\n"
+    "- verify: shell command to verify the output compiles/passes\n"
 )
 
 INTERFACE_INFERENCE_SYSTEM_PROMPT: Final[str] = (
