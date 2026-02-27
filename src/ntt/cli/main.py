@@ -110,7 +110,7 @@ def audit(
     ctx: click.Context,
     replan: bool,
 ) -> None:
-    """Semantically audit the specifications and generate plan metadata."""
+    """Semantically audit the specifications and generate build plan metadata."""
     from ntt.cli.commands.audit import run_audit
 
     run_audit(
@@ -118,4 +118,19 @@ def audit(
         verbose=ctx.obj["verbose"],
         console=ctx.obj["console"],
         replan=replan,
+    )
+
+
+@cli.command()
+@click.pass_context
+def build(
+    ctx: click.Context,
+) -> None:
+    """Execute the build plan, generating code task-by-task with LLM."""
+    from ntt.cli.commands.build import run_build
+
+    run_build(
+        config_path=ctx.obj["config_path"],
+        verbose=ctx.obj["verbose"],
+        console=ctx.obj["console"],
     )

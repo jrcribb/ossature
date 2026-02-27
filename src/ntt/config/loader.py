@@ -24,6 +24,11 @@ class TestConfig:
 
 
 @dataclass
+class BuildConfig:
+    max_fix_attempts: int = 3
+
+
+@dataclass
 class NTTConfig:
     name: str = "ntt-project"
     version: str = "0.0.1"
@@ -32,6 +37,7 @@ class NTTConfig:
 
     output: OutputConfig = field(default_factory=OutputConfig)
     test: TestConfig = field(default_factory=TestConfig)
+    build: BuildConfig = field(default_factory=BuildConfig)
 
     root: Path = field(default_factory=Path.cwd)
 
@@ -100,6 +106,12 @@ def _parse_test_config(data: dict[str, Any]) -> TestConfig:
     )
 
 
+def _parse_build_config(data: dict[str, Any]) -> BuildConfig:
+    return BuildConfig(
+        max_fix_attempts=int(data.get("max_fix_attempts", 3)),
+    )
+
+
 def load_config(path: Path | None = None) -> NTTConfig:
     if path is None:
         path = find_config()
@@ -124,6 +136,7 @@ def load_config(path: Path | None = None) -> NTTConfig:
         context_dir=project.get("context_dir", "context"),
         output=_parse_output_config(data.get("output", {})),
         test=_parse_test_config(data.get("test", {})),
+        build=_parse_build_config(data.get("build", {})),
         root=path.parent,
     )
 
