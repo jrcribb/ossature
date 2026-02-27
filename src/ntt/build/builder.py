@@ -1,5 +1,6 @@
 import json
 import re
+import shutil
 import subprocess
 import time
 from dataclasses import dataclass, field
@@ -681,6 +682,130 @@ def _print_task_header(console: Console, task: PlanTask, total: int) -> None:
         console.print(f"    [dim]→ {', '.join(task.outputs)}[/dim]")
 
 
+# Setup & tool availability
+
+
+def run_setup(config: NTTConfig, console: Console) -> bool:
+    """Run the build setup command if configured. Returns True on success."""
+    if not config.build.setup:
+        return True
+
+    console.print(f"  Running setup: [bold]{config.build.setup}[/bold]")
+    try:
+        result = subprocess.run(
+            config.build.setup,
+            shell=True,
+            capture_output=True,
+            text=True,
+            cwd=str(config.output_path),
+            timeout=300,
+        )
+    except subprocess.TimeoutExpired:
+        console.print("[red]Setup command timed out after 300 seconds.[/red]")
+        return False
+
+    if result.returncode != 0:
+        output = ""
+        if result.stdout:
+            output += result.stdout
+        if result.stderr:
+            if output:
+                output += "\n"
+            output += result.stderr
+        console.print(f"[red]Setup command failed (exit {result.returncode}):[/red]")
+        if output.strip():
+            console.print(
+                Panel(
+                    _truncate_output(output.strip()),
+                    border_style="red",
+                    expand=True,
+                    padding=(0, 1),
+                )
+            )
+        return False
+
+    console.print("  [green]Setup complete.[/green]")
+    return True
+
+
+def _extract_commands_from_plan(plan: Plan, config: NTTConfig) -> set[str]:
+    """Extract all executable commands from the plan (verify commands, setup, etc.)."""
+    commands: set[str] = set()
+
+    if config.build.setup:
+        commands.add(config.build.setup)
+    if config.build.verify:
+        commands.add(config.build.verify)
+    if config.build.test:
+        commands.add(config.build.test)
+
+    for task in plan.tasks:
+        if task.verify:
+            commands.add(task.verify)
+
+    return commands
+
+
+def _extract_executables(commands: set[str]) -> set[str]:
+    """Extract the base executable name from shell commands."""
+    executables: set[str] = set()
+    for cmd in commands:
+        # Split on shell operators to get individual commands
+        parts = re.split(r"[;&|]+", cmd)
+        for part in parts:
+            tokens = part.strip().split()
+            if not tokens:
+                continue
+            # Skip environment variable assignments (e.g., FOO=bar cmd)
+            first = tokens[0]
+            while "=" in first and not first.startswith("="):
+                tokens = tokens[1:]
+                if not tokens:
+                    break
+                first = tokens[0]
+            if tokens:
+                # Skip common shell builtins
+                if tokens[0] in ("cd", "echo", "export", "test", "[", "true", "false"):
+                    continue
+                executables.add(tokens[0])
+    return executables
+
+
+def check_tool_availability(plan: Plan, config: NTTConfig, console: Console) -> bool:
+    """Check that all tools referenced in the plan are available on the system.
+
+    Returns True if all tools are found, False if any are missing.
+    """
+    commands = _extract_commands_from_plan(plan, config)
+    if not commands:
+        return True
+
+    executables = _extract_executables(commands)
+    if not executables:
+        return True
+
+    missing: list[tuple[str, list[str]]] = []
+    for exe in sorted(executables):
+        if not shutil.which(exe):
+            # Find which commands reference this executable
+            referencing = [cmd for cmd in commands if exe in cmd.split()]
+            missing.append((exe, referencing))
+
+    if not missing:
+        return True
+
+    console.print()
+    console.print("[bold red]Missing required tools[/bold red]")
+    console.print()
+    for exe, referencing in missing:
+        console.print(f"  [red]x[/red] [bold]{exe}[/bold] not found on PATH")
+        for cmd in referencing:
+            console.print(f"    used by: [dim]{cmd}[/dim]")
+    console.print()
+    console.print("Install the missing tools before running the build to avoid wasting LLM tokens.")
+    return False
+
+
 # Main build loop
 
 
@@ -693,6 +818,15 @@ def execute_build(
     plan_filepath: Path,
 ) -> None:
     config.output_path.mkdir(parents=True, exist_ok=True)
+
+    # Check tool availability before spending LLM tokens
+    if not check_tool_availability(plan, config, console):
+        raise SystemExit(1)
+
+    # Run setup command before first task (only on fresh builds)
+    has_completed = any(t.status == TaskStatus.DONE for t in plan.tasks)
+    if not has_completed and not run_setup(config, console):
+        raise SystemExit(1)
 
     total = plan.meta.total_tasks
     completed_before = sum(1 for t in plan.tasks if t.status == TaskStatus.DONE)

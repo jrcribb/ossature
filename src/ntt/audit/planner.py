@@ -47,6 +47,14 @@ def generate_spec_plan(
                 f"- [{finding.severity.value.upper()}] {finding.location}: {finding.issue}"
             )
 
+    if config.build.setup:
+        sections.append(
+            f"\n## Build Setup Command\n"
+            f"The following setup command runs before the first task:\n"
+            f"```\n{config.build.setup}\n```\n"
+            f"Do not generate tasks that duplicate what this command does."
+        )
+
     result = agent.run_sync("\n".join(sections))
 
     return result.output

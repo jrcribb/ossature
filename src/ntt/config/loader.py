@@ -26,6 +26,9 @@ class TestConfig:
 @dataclass
 class BuildConfig:
     max_fix_attempts: int = 3
+    setup: str | None = None
+    verify: str | None = None
+    test: str | None = None
 
 
 @dataclass
@@ -109,6 +112,9 @@ def _parse_test_config(data: dict[str, Any]) -> TestConfig:
 def _parse_build_config(data: dict[str, Any]) -> BuildConfig:
     return BuildConfig(
         max_fix_attempts=int(data.get("max_fix_attempts", 3)),
+        setup=data.get("setup"),
+        verify=data.get("verify"),
+        test=data.get("test"),
     )
 
 
