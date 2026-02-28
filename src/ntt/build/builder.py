@@ -791,7 +791,7 @@ def _prompt_after_success(console: Console) -> str:
 
 def _prompt_after_failure(console: Console, task: PlanTask) -> str:
     console.print()
-    console.print("  [dim][R]etry task  [s]kip  [q]uit[/dim]")
+    console.print(r"  [dim]\[R]etry task  \[s]kip  \[q]uit[/dim]")
     try:
         response = input("  > ").strip().lower()
     except EOFError, KeyboardInterrupt:
