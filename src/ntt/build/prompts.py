@@ -1,6 +1,7 @@
 from typing import Final
 
 BUILD_MODEL: Final[str] = "anthropic:claude-sonnet-4-6"
+INTERFACE_EXTRACTION_MODEL: Final[str] = "anthropic:claude-sonnet-4-6"
 
 IMPLEMENTER_SYSTEM_PROMPT: Final[str] = (
     "You are implementing one component of a {language} project.\n"
@@ -46,4 +47,21 @@ FIXER_SYSTEM_PROMPT: Final[str] = (
     "- `run_command(command)` — run a shell command\n\n"
     "Prefer `edit_file` over `write_file` when fixing — only change what's broken. "
     "Focus only on fixing the errors — do not refactor or add features."
+)
+
+INTERFACE_EXTRACTION_SYSTEM_PROMPT: Final[str] = (
+    "You are extracting the public interface from generated {language} source code.\n\n"
+    "Given the source files for a module, produce a markdown document containing:\n"
+    "- All public types, structs/classes, enums with their fields\n"
+    "- All public function/method signatures with types\n"
+    "- Error types\n\n"
+    "Write interfaces in idiomatic {language} using fenced code blocks.\n"
+    "Organize by file with clear headers.\n\n"
+    "Do NOT include:\n"
+    "- Implementation bodies (use `...` or `pass`)\n"
+    "- Private/internal types\n"
+    "- Tests or build configuration\n"
+    "- Comments unless they are doc comments that define behavior\n\n"
+    "This document serves as the contract for dependent modules.\n"
+    "Output only the interface document."
 )

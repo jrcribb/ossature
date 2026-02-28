@@ -19,7 +19,13 @@ from rich.status import Status
 from rich.text import Text
 
 from ntt.audit.planner import write_plan
-from ntt.build.prompts import BUILD_MODEL, FIXER_SYSTEM_PROMPT, IMPLEMENTER_SYSTEM_PROMPT
+from ntt.build.prompts import (
+    BUILD_MODEL,
+    FIXER_SYSTEM_PROMPT,
+    IMPLEMENTER_SYSTEM_PROMPT,
+    INTERFACE_EXTRACTION_MODEL,
+    INTERFACE_EXTRACTION_SYSTEM_PROMPT,
+)
 from ntt.config.loader import NTTConfig
 from ntt.models.amd import AMDSpec
 from ntt.models.plan import Plan, PlanTask, TaskStatus
@@ -589,6 +595,50 @@ def save_task_output(
         tomli_w.dump(data, f)
 
 
+def extract_spec_interface(
+    spec_id: str,
+    plan: Plan,
+    config: NTTConfig,
+    console: Console,
+    status: Status,
+) -> None:
+    source_files: list[tuple[str, str]] = []
+    for task in plan.tasks:
+        if task.spec == spec_id and task.status == TaskStatus.DONE:
+            for filepath in task.outputs:
+                full_path = config.output_path / filepath
+                if full_path.exists():
+                    try:
+                        source_files.append((filepath, full_path.read_text()))
+                    except OSError:
+                        pass
+
+    if not source_files:
+        return
+
+    language = config.output.language
+    sections = [f"# Source files for {spec_id}\n"]
+    for filepath, content in source_files:
+        sections.append(f"## {filepath}\n\n```{language}\n{content}\n```\n")
+
+    status.update(f"Extracting interface: {spec_id}")
+    console.log(f"  [cyan]Extracting interface for {spec_id}...[/cyan]")
+
+    agent = Agent(
+        INTERFACE_EXTRACTION_MODEL,
+        instructions=INTERFACE_EXTRACTION_SYSTEM_PROMPT.format(language=language),
+    )
+    result = agent.run_sync("\n".join(sections))
+
+    interface_content = f"# Interface: {spec_id}\n\n@source: build\n\n{result.output}"
+
+    iface_dir = config.metadata_context_interfaces_path
+    iface_dir.mkdir(parents=True, exist_ok=True)
+    (iface_dir / f"{spec_id}.md").write_text(interface_content)
+
+    console.log(f"  [green]Interface written: .ntt/context/interfaces/{spec_id}.md[/green]")
+
+
 def _truncate_output(text: str, max_lines: int = 30) -> str:
     lines = text.splitlines()
     if len(lines) <= max_lines:
@@ -899,12 +949,38 @@ def execute_build(
     skip_next = False
     stopped = False
 
+    # Precompute spec groupings for interface extraction barriers
+    tasks_by_spec: dict[str, list[PlanTask]] = {}
+    for t in plan.tasks:
+        tasks_by_spec.setdefault(t.spec, []).append(t)
+    spec_last_task_id: dict[str, str] = {}
+    for t in plan.tasks:
+        spec_last_task_id[t.spec] = t.id
+
+    # Track which specs already have interface files
+    extracted_interfaces: set[str] = set()
+    for sid in tasks_by_spec:
+        if (config.metadata_context_interfaces_path / f"{sid}.md").exists():
+            extracted_interfaces.add(sid)
+
+    def _maybe_extract_interface(task: PlanTask, status: Status) -> None:
+        if task.id != spec_last_task_id.get(task.spec):
+            return
+        if task.spec in extracted_interfaces:
+            return
+        if not all(t.status == TaskStatus.DONE for t in tasks_by_spec[task.spec]):
+            return
+        extract_spec_interface(task.spec, plan, config, console, status)
+        extracted_interfaces.add(task.spec)
+
     with Status("", console=console) as status:
         for task in plan.tasks:
             if task.status in (TaskStatus.DONE, TaskStatus.SKIPPED):
                 console.log(
                     f"  [dim][{task.id}/{total:03d}] {task.title} ({task.status.value})[/dim]"
                 )
+                if task.status == TaskStatus.DONE:
+                    _maybe_extract_interface(task, status)
                 continue
 
             if task.status == TaskStatus.MANUAL:
@@ -965,6 +1041,9 @@ def execute_build(
                 task.status = TaskStatus.FAILED
 
             write_plan(plan, plan_filepath)
+
+            if success:
+                _maybe_extract_interface(task, status)
 
             if success and mode == BuildMode.STEP:
                 status.stop()
@@ -1034,6 +1113,8 @@ def execute_build(
                         )
                         stopped = True
                     write_plan(plan, plan_filepath)
+                    if retry_result.success:
+                        _maybe_extract_interface(task, status)
                     if stopped:
                         break
                 elif action == "skip":

@@ -99,7 +99,7 @@ def merge_into_global_plan(
                                 depends_on.append(dep_id)
 
                 cross_spec_interfaces: list[str] = []
-                if local_idx == 1 and smd_deps.get(spec_id):
+                if smd_deps.get(spec_id):
                     cross_spec_interfaces = [
                         dep_id for dep_id in smd_deps[spec_id] if dep_id in spec_last_task
                     ]
