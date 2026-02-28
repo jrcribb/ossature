@@ -602,6 +602,24 @@ def _print_verify_errors(console: Console, verify_output: str) -> None:
     )
 
 
+@dataclass
+class TaskResult:
+    success: bool
+    file_count: int = 0
+    total_lines: int = 0
+    elapsed: float = 0.0
+
+    def summary(self) -> str:
+        parts = []
+        if self.file_count:
+            files_word = "file" if self.file_count == 1 else "files"
+            parts.append(f"{self.file_count} {files_word}")
+        if self.total_lines:
+            parts.append(f"{self.total_lines} lines")
+        parts.append(f"{self.elapsed:.1f}s")
+        return ", ".join(parts)
+
+
 def build_task(
     task: PlanTask,
     config: NTTConfig,
@@ -609,7 +627,7 @@ def build_task(
     amd_by_spec: dict[str, list[AMDSpec]],
     console: Console,
     status: Status,
-) -> bool:
+) -> TaskResult:
     language = config.output.language
     impl_agent = _create_impl_agent(language)
     fix_agent = _create_fix_agent(language)
@@ -627,14 +645,24 @@ def build_task(
         status=status,
     )
 
+    t0 = time.monotonic()
+
     # Implementation
     status.update(f"Generating code for {task.title}")
     result = _run_with_retry(impl_agent, prompt, build_ctx, console)
     (task_dir / "response.md").write_text(result.output)
 
+    def _make_result(success: bool) -> TaskResult:
+        return TaskResult(
+            success=success,
+            file_count=len(build_ctx.written_files),
+            total_lines=build_ctx.total_lines,
+            elapsed=time.monotonic() - t0,
+        )
+
     if not task.verify:
         save_task_output(task_dir, build_ctx.written_files, True, "")
-        return True
+        return _make_result(True)
 
     # Verification
     status.update(f"Verifying: {task.verify}")
@@ -643,7 +671,7 @@ def build_task(
     if passed:
         console.log(f"    [green]✓[/green] {task.verify}")
         save_task_output(task_dir, build_ctx.written_files, True, verify_output)
-        return True
+        return _make_result(True)
 
     console.log(f"    [red]✗[/red] {task.verify}")
     _print_verify_errors(console, verify_output)
@@ -666,7 +694,7 @@ def build_task(
         if passed:
             console.log(f"    [green]✓[/green] {task.verify} (fixed on attempt {attempt + 1})")
             save_task_output(task_dir, build_ctx.written_files, True, verify_output)
-            return True
+            return _make_result(True)
 
         console.log(
             f"    [red]✗[/red] still failing ({attempt + 1}/{config.build.max_fix_attempts})"
@@ -674,7 +702,7 @@ def build_task(
 
     _print_verify_errors(console, verify_output)
     save_task_output(task_dir, build_ctx.written_files, False, verify_output)
-    return False
+    return _make_result(False)
 
 
 # Console output helpers
@@ -912,7 +940,7 @@ def execute_build(
 
             _print_task_header(console, task, total)
 
-            success = build_task(
+            result = build_task(
                 task,
                 config,
                 smd_map,
@@ -920,10 +948,14 @@ def execute_build(
                 console,
                 status,
             )
+            success = result.success
 
             if success:
                 task.status = TaskStatus.DONE
-                console.log(f"  [green]v [{task.id}/{total:03d}] {task.title}[/green]")
+                console.log(
+                    f"  [green]v [{task.id}/{total:03d}] {task.title}[/green]"
+                    f"  [dim]({result.summary()})[/dim]"
+                )
             else:
                 task.status = TaskStatus.FAILED
 
@@ -972,12 +1004,12 @@ def execute_build(
                     write_plan(plan, plan_filepath)
                     # Re-run the same task
                     _print_task_header(console, task, total)
-                    retry_success = build_task(task, config, smd_map, amd_by_spec, console, status)
-                    if retry_success:
+                    retry_result = build_task(task, config, smd_map, amd_by_spec, console, status)
+                    if retry_result.success:
                         task.status = TaskStatus.DONE
                         console.log(
                             f"  [green]v [{task.id}/{total:03d}] {task.title} "
-                            f"(succeeded on retry)[/green]"
+                            f"(retry)[/green]  [dim]({retry_result.summary()})[/dim]"
                         )
                     else:
                         task.status = TaskStatus.FAILED
