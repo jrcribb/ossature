@@ -4,6 +4,7 @@ import shutil
 import subprocess
 import time
 from dataclasses import dataclass, field
+from enum import Enum
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +26,14 @@ from ntt.models.plan import Plan, PlanTask, TaskStatus
 from ntt.models.smd import SMDSpec
 from ntt.renderer.amd import render_component, render_data_model, render_dependency
 from ntt.renderer.smd import render_example, render_requirement
+
+
+class BuildMode(Enum):
+    DEFAULT = "default"  # Pause on failure
+    STEP = "step"  # Pause after every task
+    AUTO = "auto"  # Run to completion, stop on failure
+    AUTO_SKIP = "auto_skip"  # Run everything possible, skip failures
+
 
 # Build context & tools
 
@@ -682,11 +691,41 @@ def _print_task_header(console: Console, task: PlanTask, total: int) -> None:
         console.print(f"    [dim]→ {', '.join(task.outputs)}[/dim]")
 
 
+# Interactive prompts
+
+
+def _prompt_after_success(console: Console) -> str:
+    console.print()
+    console.print("  [dim]Press ENTER to continue, 's' to skip next, 'q' to stop[/dim]")
+    try:
+        response = input("  > ").strip().lower()
+    except EOFError, KeyboardInterrupt:
+        return "quit"
+    if response == "q":
+        return "quit"
+    if response == "s":
+        return "skip"
+    return "continue"
+
+
+def _prompt_after_failure(console: Console, task: PlanTask) -> str:
+    console.print()
+    console.print("  [dim][R]etry task  [s]kip  [q]uit[/dim]")
+    try:
+        response = input("  > ").strip().lower()
+    except EOFError, KeyboardInterrupt:
+        return "quit"
+    if response == "r":
+        return "retry"
+    if response == "s":
+        return "skip"
+    return "quit"
+
+
 # Setup & tool availability
 
 
 def run_setup(config: NTTConfig, console: Console) -> bool:
-    """Run the build setup command if configured. Returns True on success."""
     if not config.build.setup:
         return True
 
@@ -729,7 +768,6 @@ def run_setup(config: NTTConfig, console: Console) -> bool:
 
 
 def _extract_commands_from_plan(plan: Plan, config: NTTConfig) -> set[str]:
-    """Extract all executable commands from the plan (verify commands, setup, etc.)."""
     commands: set[str] = set()
 
     if config.build.setup:
@@ -747,7 +785,6 @@ def _extract_commands_from_plan(plan: Plan, config: NTTConfig) -> set[str]:
 
 
 def _extract_executables(commands: set[str]) -> set[str]:
-    """Extract the base executable name from shell commands."""
     executables: set[str] = set()
     for cmd in commands:
         # Split on shell operators to get individual commands
@@ -772,10 +809,6 @@ def _extract_executables(commands: set[str]) -> set[str]:
 
 
 def check_tool_availability(plan: Plan, config: NTTConfig, console: Console) -> bool:
-    """Check that all tools referenced in the plan are available on the system.
-
-    Returns True if all tools are found, False if any are missing.
-    """
     commands = _extract_commands_from_plan(plan, config)
     if not commands:
         return True
@@ -816,6 +849,7 @@ def execute_build(
     amd_by_spec: dict[str, list[AMDSpec]],
     console: Console,
     plan_filepath: Path,
+    mode: BuildMode = BuildMode.DEFAULT,
 ) -> None:
     config.output_path.mkdir(parents=True, exist_ok=True)
 
@@ -830,6 +864,8 @@ def execute_build(
 
     total = plan.meta.total_tasks
     completed_before = sum(1 for t in plan.tasks if t.status == TaskStatus.DONE)
+    skip_next = False
+    stopped = False
 
     with Status("", console=console) as status:
         for task in plan.tasks:
@@ -845,6 +881,14 @@ def execute_build(
                 )
                 continue
 
+            # Handle 'skip next' from interactive prompt
+            if skip_next:
+                skip_next = False
+                task.status = TaskStatus.SKIPPED
+                write_plan(plan, plan_filepath)
+                console.log(f"  [dim][{task.id}/{total:03d}] {task.title} (skipped by user)[/dim]")
+                continue
+
             # Check dependencies
             task_status_map = {t.id: t.status for t in plan.tasks}
             deps_ok = all(
@@ -857,10 +901,13 @@ def execute_build(
                     if task_status_map.get(dep_id) != TaskStatus.DONE
                 ]
                 console.print()
-                console.log(f"  [red]✗ [{task.id}/{total:03d}] {task.title}[/red]")
+                console.log(f"  [red]x [{task.id}/{total:03d}] {task.title}[/red]")
                 console.log(f"    [red]Dependencies not met: {', '.join(unmet)}[/red]")
                 task.status = TaskStatus.FAILED
                 write_plan(plan, plan_filepath)
+                if mode == BuildMode.AUTO_SKIP:
+                    continue
+                stopped = True
                 break
 
             _print_task_header(console, task, total)
@@ -876,27 +923,106 @@ def execute_build(
 
             if success:
                 task.status = TaskStatus.DONE
-                console.log(f"  [green]✓ [{task.id}/{total:03d}] {task.title}[/green]")
+                console.log(f"  [green]v [{task.id}/{total:03d}] {task.title}[/green]")
             else:
                 task.status = TaskStatus.FAILED
 
             write_plan(plan, plan_filepath)
 
+            if success and mode == BuildMode.STEP:
+                status.stop()
+                action = _prompt_after_success(console)
+                status.start()
+                if action == "quit":
+                    stopped = True
+                    break
+                if action == "skip":
+                    skip_next = True
+
             if not success:
-                console.print()
-                console.print(
-                    Panel(
-                        f"Task [bold]{task.id}[/bold] failed after "
-                        f"{config.build.max_fix_attempts} fix attempts.\n"
-                        f"Review: [cyan].ntt/tasks/{task.id}-*/[/cyan]\n"
-                        f"Resume: [cyan]ntt build[/cyan]",
-                        title="[bold red]Build Stopped[/bold red]",
-                        border_style="red",
-                        expand=False,
-                        box=box.ROUNDED,
+                if mode == BuildMode.AUTO_SKIP:
+                    console.log(
+                        f"  [red]x [{task.id}/{total:03d}] {task.title} (failed, continuing)[/red]"
                     )
-                )
-                return
+                    continue
+
+                if mode == BuildMode.AUTO:
+                    console.print()
+                    console.print(
+                        Panel(
+                            f"Task [bold]{task.id}[/bold] failed after "
+                            f"{config.build.max_fix_attempts} fix attempts.\n"
+                            f"Review: [cyan].ntt/tasks/{task.id}-*/[/cyan]\n"
+                            f"Resume: [cyan]ntt build[/cyan]",
+                            title="[bold red]Build Stopped[/bold red]",
+                            border_style="red",
+                            expand=False,
+                            box=box.ROUNDED,
+                        )
+                    )
+                    stopped = True
+                    break
+
+                # DEFAULT and STEP: interactive failure prompt
+                status.stop()
+                action = _prompt_after_failure(console, task)
+                status.start()
+                if action == "retry":
+                    task.status = TaskStatus.PENDING
+                    write_plan(plan, plan_filepath)
+                    # Re-run the same task
+                    _print_task_header(console, task, total)
+                    retry_success = build_task(task, config, smd_map, amd_by_spec, console, status)
+                    if retry_success:
+                        task.status = TaskStatus.DONE
+                        console.log(
+                            f"  [green]v [{task.id}/{total:03d}] {task.title} "
+                            f"(succeeded on retry)[/green]"
+                        )
+                    else:
+                        task.status = TaskStatus.FAILED
+                        console.print()
+                        console.print(
+                            Panel(
+                                f"Task [bold]{task.id}[/bold] still failing.\n"
+                                f"Review: [cyan].ntt/tasks/{task.id}-*/[/cyan]\n"
+                                f"Resume: [cyan]ntt build[/cyan]",
+                                title="[bold red]Build Stopped[/bold red]",
+                                border_style="red",
+                                expand=False,
+                                box=box.ROUNDED,
+                            )
+                        )
+                        stopped = True
+                    write_plan(plan, plan_filepath)
+                    if stopped:
+                        break
+                elif action == "skip":
+                    task.status = TaskStatus.SKIPPED
+                    write_plan(plan, plan_filepath)
+                    console.log(
+                        f"  [dim][{task.id}/{total:03d}] {task.title} (skipped by user)[/dim]"
+                    )
+                else:
+                    # quit
+                    console.print()
+                    console.print(
+                        Panel(
+                            f"Task [bold]{task.id}[/bold] failed after "
+                            f"{config.build.max_fix_attempts} fix attempts.\n"
+                            f"Review: [cyan].ntt/tasks/{task.id}-*/[/cyan]\n"
+                            f"Resume: [cyan]ntt build[/cyan]",
+                            title="[bold red]Build Stopped[/bold red]",
+                            border_style="red",
+                            expand=False,
+                            box=box.ROUNDED,
+                        )
+                    )
+                    stopped = True
+                    break
+
+    if stopped:
+        return
 
     # Final summary
     done = sum(1 for t in plan.tasks if t.status == TaskStatus.DONE)

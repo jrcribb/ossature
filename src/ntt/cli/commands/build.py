@@ -5,8 +5,37 @@ from rich.console import Console
 from ntt.cli.decorators import requires_llm
 from ntt.config.loader import ConfigError, load_config
 from ntt.models.amd import AMDSpec
+from ntt.models.plan import TaskStatus
 from ntt.parsers.amd import parse_amd_file
 from ntt.parsers.smd import parse_smd_file
+
+
+def _resolve_spec_filter(
+    spec_filter: str,
+    plan_specs: list[str],
+    smd_deps: dict[str, list[str]],
+    console: Console,
+) -> set[str]:
+    target = spec_filter.upper()
+    if target not in plan_specs:
+        console.print(
+            f"[red]Error:[/] Unknown spec '{spec_filter}'. Available: {', '.join(plan_specs)}"
+        )
+        raise SystemExit(1)
+
+    # Collect transitive dependencies
+    needed: set[str] = set()
+    queue = [target]
+    while queue:
+        sid = queue.pop()
+        if sid in needed:
+            continue
+        needed.add(sid)
+        for dep in smd_deps.get(sid, []):
+            if dep not in needed:
+                queue.append(dep)
+
+    return needed
 
 
 @requires_llm
@@ -14,6 +43,11 @@ def run_build(
     config_path: Path | None,
     verbose: bool,
     console: Console,
+    step: bool = False,
+    auto: bool = False,
+    skip_failures: bool = False,
+    spec_filter: str | None = None,
+    force: bool = False,
 ) -> None:
     try:
         config = load_config(config_path)
@@ -30,15 +64,40 @@ def run_build(
         console.print("[red]No plan found. Run `ntt audit` first.[/red]")
         raise SystemExit(1)
 
+    # --force: reset all task statuses to pending
+    if force:
+        for task in plan.tasks:
+            task.status = TaskStatus.PENDING
+
+    # --spec: filter to target spec + transitive dependencies
+    if spec_filter:
+        smd_files = list(config.spec_path.glob("**/*.smd"))
+        parsed_smds_for_deps = [parse_smd_file(f) for f in smd_files]
+        smd_deps = {smd.spec_id: list(smd.depends) for smd in parsed_smds_for_deps}
+
+        needed_specs = _resolve_spec_filter(spec_filter, plan.meta.specs, smd_deps, console)
+
+        # Mark tasks outside needed specs as skipped (if not already done)
+        for task in plan.tasks:
+            if task.spec not in needed_specs and task.status != TaskStatus.DONE:
+                task.status = TaskStatus.SKIPPED
+
     pending = sum(1 for t in plan.tasks if t.status.value == "pending")
-    if pending == 0:
+    failed = sum(1 for t in plan.tasks if t.status.value == "failed")
+    actionable = pending + failed
+    if actionable == 0:
         console.print("[green]All tasks already completed.[/green]")
         return
 
-    console.print(
-        f"[bold]{config.name} v{config.version}[/bold] — "
-        f"{plan.meta.total_tasks} tasks, {pending} pending\n"
-    )
+    status_parts = [f"{plan.meta.total_tasks} tasks"]
+    if pending:
+        status_parts.append(f"{pending} pending")
+    if failed:
+        status_parts.append(f"{failed} failed")
+    if spec_filter:
+        status_parts.append(f"spec: {spec_filter.upper()}")
+
+    console.print(f"[bold]{config.name} v{config.version}[/bold] — {', '.join(status_parts)}\n")
 
     # Parse specs for context assembly
     smd_files = list(config.spec_path.glob("**/*.smd"))
@@ -52,6 +111,15 @@ def run_build(
     for amd in parsed_amds:
         amd_by_spec.setdefault(amd.spec_id, []).append(amd)
 
-    from ntt.build.builder import execute_build
+    from ntt.build.builder import BuildMode, execute_build
 
-    execute_build(config, plan, smd_map, amd_by_spec, console, plan_filepath)
+    if step:
+        mode = BuildMode.STEP
+    elif auto and skip_failures:
+        mode = BuildMode.AUTO_SKIP
+    elif auto:
+        mode = BuildMode.AUTO
+    else:
+        mode = BuildMode.DEFAULT
+
+    execute_build(config, plan, smd_map, amd_by_spec, console, plan_filepath, mode)

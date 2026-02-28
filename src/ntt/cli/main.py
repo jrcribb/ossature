@@ -122,15 +122,60 @@ def audit(
 
 
 @cli.command()
+@click.option(
+    "--step",
+    is_flag=True,
+    help="Pause after every task for approval",
+)
+@click.option(
+    "--auto",
+    is_flag=True,
+    help="Run to completion, only stop on failure",
+)
+@click.option(
+    "--skip-failures",
+    is_flag=True,
+    help="Skip failed tasks and continue (requires --auto)",
+)
+@click.option(
+    "--spec",
+    "spec_filter",
+    type=str,
+    default=None,
+    help="Build only this spec (and its dependencies if needed)",
+)
+@click.option(
+    "--force",
+    is_flag=True,
+    help="Full rebuild, ignore all cached state",
+)
 @click.pass_context
 def build(
     ctx: click.Context,
+    step: bool,
+    auto: bool,
+    skip_failures: bool,
+    spec_filter: str | None,
+    force: bool,
 ) -> None:
     """Execute the build plan, generating code task-by-task with LLM."""
     from ntt.cli.commands.build import run_build
+
+    if step and auto:
+        ctx.obj["console"].print("[red]Error:[/] --step and --auto are mutually exclusive.")
+        raise SystemExit(1)
+
+    if skip_failures and not auto:
+        ctx.obj["console"].print("[red]Error:[/] --skip-failures requires --auto.")
+        raise SystemExit(1)
 
     run_build(
         config_path=ctx.obj["config_path"],
         verbose=ctx.obj["verbose"],
         console=ctx.obj["console"],
+        step=step,
+        auto=auto,
+        skip_failures=skip_failures,
+        spec_filter=spec_filter,
+        force=force,
     )
