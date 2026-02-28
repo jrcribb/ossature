@@ -2,80 +2,40 @@ import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from conftest import make_config, make_plan, make_task
+
 from ntt.build.builder import (
     _extract_commands_from_plan,
     _extract_executables,
     check_tool_availability,
     run_setup,
 )
-from ntt.config.loader import BuildConfig, NTTConfig, OutputConfig
-from ntt.models.plan import Plan, PlanMeta, PlanTask
-
-
-def _make_config(
-    root: Path,
-    setup: str | None = None,
-    verify: str | None = None,
-    test: str | None = None,
-) -> NTTConfig:
-    return NTTConfig(
-        name="test",
-        version="0.0.1",
-        root=root,
-        output=OutputConfig(language="rust"),
-        build=BuildConfig(setup=setup, verify=verify, test=test),
-    )
-
-
-def _make_plan(verify_commands: list[str]) -> Plan:
-    tasks = [
-        PlanTask(
-            id=f"{i + 1:03d}",
-            spec="TEST",
-            title=f"Task {i + 1}",
-            description="",
-            outputs=[],
-            depends_on=[],
-            spec_refs=[],
-            arch_refs=[],
-            verify=v,
-        )
-        for i, v in enumerate(verify_commands)
-    ]
-    return Plan(
-        meta=PlanMeta(
-            generated_at="2026-01-01T00:00:00Z",
-            total_tasks=len(tasks),
-            specs=["TEST"],
-        ),
-        tasks=tasks,
-    )
 
 
 class TestRunSetup:
     def test_no_setup_returns_true(self, temp_dir: Path):
-        config = _make_config(temp_dir)
+        config = make_config(temp_dir, language="rust")
         console = MagicMock()
         assert run_setup(config, console) is True
 
     def test_successful_setup(self, temp_dir: Path):
         output_dir = temp_dir / "output"
         output_dir.mkdir()
-        config = _make_config(temp_dir, setup="echo hello")
+        config = make_config(temp_dir, language="rust", setup="echo hello")
         console = MagicMock()
         assert run_setup(config, console) is True
 
     def test_failed_setup(self, temp_dir: Path):
         output_dir = temp_dir / "output"
         output_dir.mkdir()
-        config = _make_config(temp_dir, setup="false")
+        config = make_config(temp_dir, language="rust", setup="false")
         console = MagicMock()
         assert run_setup(config, console) is False
 
     def test_setup_timeout(self, temp_dir: Path):
         output_dir = temp_dir / "output"
         output_dir.mkdir()
-        config = _make_config(temp_dir, setup="sleep 999")
+        config = make_config(temp_dir, language="rust", setup="sleep 999")
         console = MagicMock()
 
         with patch(
@@ -86,7 +46,7 @@ class TestRunSetup:
     def test_setup_runs_in_output_dir(self, temp_dir: Path):
         output_dir = temp_dir / "output"
         output_dir.mkdir()
-        config = _make_config(temp_dir, setup="pwd")
+        config = make_config(temp_dir, language="rust", setup="pwd")
         console = MagicMock()
 
         with patch("ntt.build.builder.subprocess.run") as mock_run:
@@ -100,16 +60,23 @@ class TestRunSetup:
 
 class TestExtractCommands:
     def test_collects_from_plan_and_config(self, temp_dir: Path):
-        config = _make_config(temp_dir, setup="cargo init", verify="cargo check", test="cargo test")
-        plan = _make_plan(["cargo check", "cargo test"])
+        config = make_config(
+            temp_dir, language="rust", setup="cargo init", verify="cargo check", test="cargo test"
+        )
+        plan = make_plan(
+            [
+                make_task("001", "TEST", verify="cargo check"),
+                make_task("002", "TEST", verify="cargo test"),
+            ]
+        )
         commands = _extract_commands_from_plan(plan, config)
         assert "cargo init" in commands
         assert "cargo check" in commands
         assert "cargo test" in commands
 
     def test_empty_plan_and_config(self, temp_dir: Path):
-        config = _make_config(temp_dir)
-        plan = _make_plan([])
+        config = make_config(temp_dir, language="rust")
+        plan = make_plan([])
         assert _extract_commands_from_plan(plan, config) == set()
 
 
@@ -144,29 +111,34 @@ class TestExtractExecutables:
 
 class TestCheckToolAvailability:
     def test_all_tools_present(self, temp_dir: Path):
-        config = _make_config(temp_dir)
-        plan = _make_plan(["echo hello"])
+        config = make_config(temp_dir, language="rust")
+        plan = make_plan([make_task("001", "TEST", verify="echo hello")])
         console = MagicMock()
         # echo is a builtin, so nothing to check
         assert check_tool_availability(plan, config, console) is True
 
     def test_missing_tool(self, temp_dir: Path):
-        config = _make_config(temp_dir)
-        plan = _make_plan(["nonexistent_tool_xyz check"])
+        config = make_config(temp_dir, language="rust")
+        plan = make_plan([make_task("001", "TEST", verify="nonexistent_tool_xyz check")])
         console = MagicMock()
         assert check_tool_availability(plan, config, console) is False
 
     def test_empty_plan(self, temp_dir: Path):
-        config = _make_config(temp_dir)
-        plan = _make_plan([])
+        config = make_config(temp_dir, language="rust")
+        plan = make_plan([])
         console = MagicMock()
         assert check_tool_availability(plan, config, console) is True
 
     @patch("ntt.build.builder.shutil.which")
     def test_reports_all_missing(self, mock_which, temp_dir: Path):
         mock_which.return_value = None
-        config = _make_config(temp_dir, setup="cargo init")
-        plan = _make_plan(["cargo check", "rustfmt src/main.rs"])
+        config = make_config(temp_dir, language="rust", setup="cargo init")
+        plan = make_plan(
+            [
+                make_task("001", "TEST", verify="cargo check"),
+                make_task("002", "TEST", verify="rustfmt src/main.rs"),
+            ]
+        )
         console = MagicMock()
         result = check_tool_availability(plan, config, console)
         assert result is False

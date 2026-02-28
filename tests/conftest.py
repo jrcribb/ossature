@@ -4,7 +4,10 @@ from pathlib import Path
 
 import pytest
 
-from ntt.config.loader import NTTConfig, OutputConfig
+from ntt.config.loader import BuildConfig, NTTConfig, OutputConfig
+from ntt.models.plan import Plan, PlanMeta, PlanTask, TaskStatus
+from ntt.models.shared import Status
+from ntt.models.smd import Priority, SMDSpec
 from ntt.templates.manager import TemplateManager
 
 
@@ -29,4 +32,66 @@ def sample_config(temp_dir: Path) -> NTTConfig:
         root=temp_dir,
         spec_dir="specs",
         output=OutputConfig(language="python"),
+    )
+
+
+def make_config(
+    root: Path,
+    language: str = "python",
+    output_dir: str = "output",
+    setup: str | None = None,
+    verify: str | None = None,
+    test: str | None = None,
+) -> NTTConfig:
+    return NTTConfig(
+        name="test",
+        version="0.0.1",
+        root=root,
+        output=OutputConfig(dir=output_dir, language=language),
+        build=BuildConfig(setup=setup, verify=verify, test=test),
+    )
+
+
+def make_smd(spec_id: str, depends: list[str] | None = None) -> SMDSpec:
+    return SMDSpec(
+        title=f"{spec_id} Module",
+        spec_id=spec_id,
+        status=Status.DRAFT,
+        priority=Priority.HIGH,
+        overview=f"Overview of {spec_id}",
+        depends=depends or [],
+    )
+
+
+def make_task(
+    id: str,
+    spec: str,
+    outputs: list[str] | None = None,
+    depends_on: list[str] | None = None,
+    status: TaskStatus = TaskStatus.PENDING,
+    verify: str = "",
+) -> PlanTask:
+    return PlanTask(
+        id=id,
+        spec=spec,
+        title=f"{spec} task {id}",
+        description="",
+        outputs=outputs or [],
+        depends_on=depends_on or [],
+        spec_refs=[],
+        arch_refs=[],
+        status=status,
+        verify=verify,
+    )
+
+
+def make_plan(tasks: list[PlanTask]) -> Plan:
+    specs = sorted({t.spec for t in tasks})
+    return Plan(
+        meta=PlanMeta(
+            generated_at="2026-01-01T00:00:00Z",
+            total_tasks=len(tasks),
+            specs=specs,
+        ),
+        tasks=tasks,
     )

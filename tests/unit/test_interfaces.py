@@ -1,7 +1,8 @@
+from conftest import make_smd
+
 from ntt.audit.interfaces import extract_interface_from_amds, propagate_to_smd_dependents
 from ntt.models.amd import AMDSpec, Component, DataModel
 from ntt.models.shared import Status
-from ntt.models.smd import Priority, SMDSpec
 
 
 class TestExtractInterfaceFromAmds:
@@ -206,17 +207,6 @@ class TestExtractInterfaceFromAmds:
         assert "```" not in result.split("### Placeholder")[1]
 
 
-def _make_smd(spec_id: str, depends: list[str] | None = None) -> SMDSpec:
-    return SMDSpec(
-        title=f"Spec {spec_id}",
-        spec_id=spec_id,
-        status=Status.DRAFT,
-        priority=Priority.HIGH,
-        overview=f"Overview of {spec_id}.",
-        depends=depends or [],
-    )
-
-
 def _make_amd(spec_id: str) -> AMDSpec:
     return AMDSpec(
         title=f"Arch {spec_id}",
@@ -236,15 +226,15 @@ def _make_amd(spec_id: str) -> AMDSpec:
 
 class TestPropagateToSmdDependents:
     def test_no_propagation_when_no_dependents(self):
-        smds = [_make_smd("AUTH")]
+        smds = [make_smd("AUTH")]
         amd_by_spec: dict[str, list[AMDSpec]] = {}
         result = propagate_to_smd_dependents({"AUTH"}, smds, amd_by_spec)
         assert result == {"AUTH"}
 
     def test_propagates_to_smd_only_dependent(self):
         smds = [
-            _make_smd("AUTH"),
-            _make_smd("API", depends=["AUTH"]),
+            make_smd("AUTH"),
+            make_smd("API", depends=["AUTH"]),
         ]
         amd_by_spec: dict[str, list[AMDSpec]] = {}
         result = propagate_to_smd_dependents({"AUTH"}, smds, amd_by_spec)
@@ -252,8 +242,8 @@ class TestPropagateToSmdDependents:
 
     def test_does_not_propagate_to_amd_backed(self):
         smds = [
-            _make_smd("AUTH"),
-            _make_smd("API", depends=["AUTH"]),
+            make_smd("AUTH"),
+            make_smd("API", depends=["AUTH"]),
         ]
         api_amd = _make_amd("API")
         amd_by_spec = {"API": [api_amd]}
@@ -262,9 +252,9 @@ class TestPropagateToSmdDependents:
 
     def test_transitive_propagation(self):
         smds = [
-            _make_smd("DB"),
-            _make_smd("API", depends=["DB"]),
-            _make_smd("FRONTEND", depends=["API"]),
+            make_smd("DB"),
+            make_smd("API", depends=["DB"]),
+            make_smd("FRONTEND", depends=["API"]),
         ]
         amd_by_spec: dict[str, list[AMDSpec]] = {}
         result = propagate_to_smd_dependents({"DB"}, smds, amd_by_spec)
@@ -272,9 +262,9 @@ class TestPropagateToSmdDependents:
 
     def test_transitive_stops_at_amd_backed(self):
         smds = [
-            _make_smd("DB"),
-            _make_smd("API", depends=["DB"]),
-            _make_smd("FRONTEND", depends=["API"]),
+            make_smd("DB"),
+            make_smd("API", depends=["DB"]),
+            make_smd("FRONTEND", depends=["API"]),
         ]
         api_amd = _make_amd("API")
         amd_by_spec = {"API": [api_amd]}
@@ -285,8 +275,8 @@ class TestPropagateToSmdDependents:
 
     def test_empty_changed_set(self):
         smds = [
-            _make_smd("AUTH"),
-            _make_smd("API", depends=["AUTH"]),
+            make_smd("AUTH"),
+            make_smd("API", depends=["AUTH"]),
         ]
         amd_by_spec: dict[str, list[AMDSpec]] = {}
         result = propagate_to_smd_dependents(set(), smds, amd_by_spec)
@@ -294,9 +284,9 @@ class TestPropagateToSmdDependents:
 
     def test_multiple_dependencies(self):
         smds = [
-            _make_smd("AUTH"),
-            _make_smd("DB"),
-            _make_smd("API", depends=["AUTH", "DB"]),
+            make_smd("AUTH"),
+            make_smd("DB"),
+            make_smd("API", depends=["AUTH", "DB"]),
         ]
         amd_by_spec: dict[str, list[AMDSpec]] = {}
         # Only AUTH changed, but API depends on AUTH → propagated
@@ -305,8 +295,8 @@ class TestPropagateToSmdDependents:
 
     def test_independent_specs_no_propagation(self):
         smds = [
-            _make_smd("AUTH"),
-            _make_smd("DB"),
+            make_smd("AUTH"),
+            make_smd("DB"),
         ]
         amd_by_spec: dict[str, list[AMDSpec]] = {}
         result = propagate_to_smd_dependents({"AUTH"}, smds, amd_by_spec)

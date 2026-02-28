@@ -1,21 +1,10 @@
 from pathlib import Path
 
+from conftest import make_smd
+
 from ntt.audit.graph import SpecGraph, SpecGraphEntry
 from ntt.audit.planner import load_plan, merge_into_global_plan, write_plan, write_task_definitions
 from ntt.models.plan import PlannerTask, SpecTaskPlan, TaskStatus
-from ntt.models.shared import Status
-from ntt.models.smd import SMDSpec
-
-
-def _make_smd(spec_id: str, depends: list[str] | None = None) -> SMDSpec:
-    return SMDSpec(
-        title=f"{spec_id} Module",
-        spec_id=spec_id,
-        status=Status.DRAFT,
-        priority="high",
-        overview=f"Overview of {spec_id}",
-        depends=depends or [],
-    )
 
 
 def _make_spec_plan(tasks: list[dict]) -> SpecTaskPlan:
@@ -37,7 +26,7 @@ def _make_spec_plan(tasks: list[dict]) -> SpecTaskPlan:
 
 class TestMergeIntoGlobalPlan:
     def test_single_spec_assigns_sequential_ids(self):
-        smds = [_make_smd("AUTH")]
+        smds = [make_smd("AUTH")]
         graph = SpecGraph(
             specs=[SpecGraphEntry(id="AUTH", file="specs/auth.smd", depends=[])],
             levels=[["AUTH"]],
@@ -59,7 +48,7 @@ class TestMergeIntoGlobalPlan:
         assert [t.id for t in plan.tasks] == ["001", "002", "003"]
 
     def test_single_spec_remaps_local_depends_to_global(self):
-        smds = [_make_smd("AUTH")]
+        smds = [make_smd("AUTH")]
         graph = SpecGraph(
             specs=[SpecGraphEntry(id="AUTH", file="specs/auth.smd", depends=[])],
             levels=[["AUTH"]],
@@ -81,7 +70,7 @@ class TestMergeIntoGlobalPlan:
         assert plan.tasks[2].depends_on == ["001", "002"]
 
     def test_cross_spec_dependency_wiring(self):
-        smds = [_make_smd("AUTH"), _make_smd("API", depends=["AUTH"])]
+        smds = [make_smd("AUTH"), make_smd("API", depends=["AUTH"])]
         graph = SpecGraph(
             specs=[
                 SpecGraphEntry(id="AUTH", file="specs/auth.smd", depends=[]),
@@ -112,8 +101,8 @@ class TestMergeIntoGlobalPlan:
         assert api_scaffold.spec == "API"
         assert "002" in api_scaffold.depends_on  # last AUTH task
 
-    def test_cross_spec_interfaces_set_on_boundary(self):
-        smds = [_make_smd("AUTH"), _make_smd("DB"), _make_smd("API", depends=["AUTH", "DB"])]
+    def test_cross_spec_interfaces_set_on_all_dependent_tasks(self):
+        smds = [make_smd("AUTH"), make_smd("DB"), make_smd("API", depends=["AUTH", "DB"])]
         graph = SpecGraph(
             specs=[
                 SpecGraphEntry(id="AUTH", file="specs/auth.smd", depends=[]),
@@ -125,16 +114,24 @@ class TestMergeIntoGlobalPlan:
         spec_plans = {
             "AUTH": _make_spec_plan([{"title": "Auth Scaffold"}]),
             "DB": _make_spec_plan([{"title": "DB Scaffold"}]),
-            "API": _make_spec_plan([{"title": "API Scaffold"}]),
+            "API": _make_spec_plan(
+                [
+                    {"title": "API Scaffold"},
+                    {"title": "API Routes", "depends_on": [1]},
+                    {"title": "API Tests", "depends_on": [2]},
+                ]
+            ),
         }
 
         plan = merge_into_global_plan(spec_plans, graph, smds)
 
-        api_task = next(t for t in plan.tasks if t.spec == "API")
-        assert sorted(api_task.cross_spec_interfaces) == ["AUTH", "DB"]
+        api_tasks = [t for t in plan.tasks if t.spec == "API"]
+        assert len(api_tasks) == 3
+        for api_task in api_tasks:
+            assert sorted(api_task.cross_spec_interfaces) == ["AUTH", "DB"]
 
     def test_spec_refs_prefixed_with_spec_id(self):
-        smds = [_make_smd("AUTH")]
+        smds = [make_smd("AUTH")]
         graph = SpecGraph(
             specs=[SpecGraphEntry(id="AUTH", file="specs/auth.smd", depends=[])],
             levels=[["AUTH"]],
@@ -157,7 +154,7 @@ class TestMergeIntoGlobalPlan:
         assert plan.tasks[0].arch_refs == ["AUTH:dependencies"]
 
     def test_inject_files_from_same_spec_dependencies(self):
-        smds = [_make_smd("AUTH")]
+        smds = [make_smd("AUTH")]
         graph = SpecGraph(
             specs=[SpecGraphEntry(id="AUTH", file="specs/auth.smd", depends=[])],
             levels=[["AUTH"]],
@@ -182,7 +179,7 @@ class TestMergeIntoGlobalPlan:
         assert plan.tasks[2].inject_files == ["src/auth/mod.rs", "src/auth/types.rs"]
 
     def test_no_inject_files_across_spec_boundaries(self):
-        smds = [_make_smd("AUTH"), _make_smd("API", depends=["AUTH"])]
+        smds = [make_smd("AUTH"), make_smd("API", depends=["AUTH"])]
         graph = SpecGraph(
             specs=[
                 SpecGraphEntry(id="AUTH", file="specs/auth.smd", depends=[]),
@@ -210,7 +207,7 @@ class TestMergeIntoGlobalPlan:
         assert api_task.inject_files == []
 
     def test_all_tasks_start_as_pending(self):
-        smds = [_make_smd("AUTH")]
+        smds = [make_smd("AUTH")]
         graph = SpecGraph(
             specs=[SpecGraphEntry(id="AUTH", file="specs/auth.smd", depends=[])],
             levels=[["AUTH"]],
@@ -229,7 +226,7 @@ class TestMergeIntoGlobalPlan:
         assert all(t.status == TaskStatus.PENDING for t in plan.tasks)
 
     def test_empty_spec_plan_skipped(self):
-        smds = [_make_smd("AUTH")]
+        smds = [make_smd("AUTH")]
         graph = SpecGraph(
             specs=[SpecGraphEntry(id="AUTH", file="specs/auth.smd", depends=[])],
             levels=[["AUTH"]],
@@ -244,7 +241,7 @@ class TestMergeIntoGlobalPlan:
 
 class TestPlanTomlRoundtrip:
     def test_write_and_load(self, temp_dir: Path):
-        smds = [_make_smd("AUTH")]
+        smds = [make_smd("AUTH")]
         graph = SpecGraph(
             specs=[SpecGraphEntry(id="AUTH", file="specs/auth.smd", depends=[])],
             levels=[["AUTH"]],
@@ -301,7 +298,7 @@ class TestPlanTomlRoundtrip:
 
 class TestWriteTaskDefinitions:
     def test_creates_task_directories(self, temp_dir: Path):
-        smds = [_make_smd("AUTH")]
+        smds = [make_smd("AUTH")]
         graph = SpecGraph(
             specs=[SpecGraphEntry(id="AUTH", file="specs/auth.smd", depends=[])],
             levels=[["AUTH"]],
