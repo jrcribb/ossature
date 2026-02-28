@@ -26,6 +26,14 @@ from ntt.build.prompts import (
     INTERFACE_EXTRACTION_MODEL,
     INTERFACE_EXTRACTION_SYSTEM_PROMPT,
 )
+from ntt.build.state import (
+    TaskState,
+    compute_input_hash,
+    compute_output_hash,
+    get_task_written_files,
+    load_state,
+    write_state,
+)
 from ntt.config.loader import NTTConfig
 from ntt.models.amd import AMDSpec
 from ntt.models.plan import Plan, PlanTask, TaskStatus
@@ -667,6 +675,7 @@ class TaskResult:
     file_count: int = 0
     total_lines: int = 0
     elapsed: float = 0.0
+    written_files: list[str] = field(default_factory=list)
 
     def summary(self) -> str:
         parts = []
@@ -682,8 +691,7 @@ class TaskResult:
 def build_task(
     task: PlanTask,
     config: NTTConfig,
-    smd_map: dict[str, SMDSpec],
-    amd_by_spec: dict[str, list[AMDSpec]],
+    prompt: str,
     console: Console,
     status: Status,
     verbose: bool = False,
@@ -695,7 +703,6 @@ def build_task(
     task_dir = config.metadata_path / "tasks" / f"{task.id}-{slug}"
     task_dir.mkdir(parents=True, exist_ok=True)
 
-    prompt = assemble_task_prompt(task, config, smd_map, amd_by_spec)
     (task_dir / "prompt.md").write_text(prompt)
 
     task_label = f"[{task.id}] {task.title}"
@@ -721,6 +728,7 @@ def build_task(
             file_count=len(build_ctx.written_files),
             total_lines=build_ctx.total_lines,
             elapsed=time.monotonic() - t0,
+            written_files=list(build_ctx.written_files),
         )
 
     if not task.verify:
@@ -1018,6 +1026,11 @@ def execute_build(
     skip_next = False
     stopped = False
 
+    # Load build state for input/output hash verification
+    state_filepath = config.metadata_path / "state.toml"
+    state = load_state(state_filepath)
+    tasks_dir = config.metadata_path / "tasks"
+
     # Precompute spec groupings for interface extraction barriers
     tasks_by_spec: dict[str, list[PlanTask]] = {}
     for t in plan.tasks:
@@ -1026,16 +1039,17 @@ def execute_build(
     for t in plan.tasks:
         spec_last_task_id[t.spec] = t.id
 
-    # Track which specs already have interface files
+    # Track which specs already have interface files and which were rebuilt
     extracted_interfaces: set[str] = set()
     for sid in tasks_by_spec:
         if (config.metadata_context_interfaces_path / f"{sid}.md").exists():
             extracted_interfaces.add(sid)
+    rebuilt_specs: set[str] = set()
 
     def _maybe_extract_interface(task: PlanTask, status: Status) -> None:
         if task.id != spec_last_task_id.get(task.spec):
             return
-        if task.spec in extracted_interfaces:
+        if task.spec in extracted_interfaces and task.spec not in rebuilt_specs:
             return
         if not all(t.status == TaskStatus.DONE for t in tasks_by_spec[task.spec]):
             return
@@ -1049,14 +1063,51 @@ def execute_build(
             return
         extracted_interfaces.add(task.spec)
 
+    def _store_task_state(task: PlanTask, prompt: str, written_files: list[str]) -> None:
+        input_h = compute_input_hash(prompt, task, config)
+        output_h = compute_output_hash(written_files, config)
+        state.set(task.id, TaskState(input_h, output_h, list(written_files)))
+        write_state(state, state_filepath)
+
     with Status("", console=console) as status:
         for task in plan.tasks:
-            if task.status in (TaskStatus.DONE, TaskStatus.SKIPPED):
-                console.log(
-                    f"  [dim][{task.id}/{total:03d}] {task.title} ({task.status.value})[/dim]"
-                )
-                if task.status == TaskStatus.DONE:
+            if task.status == TaskStatus.SKIPPED:
+                console.log(f"  [dim][{task.id}/{total:03d}] {task.title} (skipped)[/dim]")
+                continue
+
+            if task.status == TaskStatus.DONE:
+                prompt = assemble_task_prompt(task, config, smd_map, amd_by_spec)
+                current_input_hash = compute_input_hash(prompt, task, config)
+                stored = state.get(task.id)
+
+                if stored and stored.input_hash == current_input_hash:
+                    # Input unchanged — verify output integrity
+                    current_output_hash = compute_output_hash(stored.written_files, config)
+                    if stored.output_hash == current_output_hash:
+                        console.log(f"  [dim][{task.id}/{total:03d}] {task.title} (done)[/dim]")
+                        _maybe_extract_interface(task, status)
+                        continue
+                    else:
+                        console.log(
+                            f"  [yellow][{task.id}/{total:03d}] {task.title}"
+                            f" — output modified, re-running[/yellow]"
+                        )
+                elif stored:
+                    console.log(
+                        f"  [yellow][{task.id}/{total:03d}] {task.title}"
+                        f" — input changed, re-running[/yellow]"
+                    )
+                else:
+                    # No stored state — trust DONE status, backfill hashes
+                    written_files = get_task_written_files(task, tasks_dir)
+                    _store_task_state(task, prompt, written_files)
+                    console.log(f"  [dim][{task.id}/{total:03d}] {task.title} (done)[/dim]")
                     _maybe_extract_interface(task, status)
+                    continue
+
+                # Stale — mark for re-run
+                task.status = TaskStatus.PENDING
+                write_plan(plan, plan_filepath)
                 continue
 
             if task.status == TaskStatus.MANUAL:
@@ -1096,13 +1147,14 @@ def execute_build(
 
             _print_task_header(console, task, total, verbose)
 
+            # Assemble prompt once — reused for build, retry, and hash storage
+            prompt = assemble_task_prompt(task, config, smd_map, amd_by_spec)
+
             # Run task with LLM error recovery
             llm_bail = False
             while True:
                 try:
-                    result = build_task(
-                        task, config, smd_map, amd_by_spec, console, status, verbose
-                    )
+                    result = build_task(task, config, prompt, console, status, verbose)
                     break
                 except AgentRunError as e:
                     task.status = TaskStatus.FAILED
@@ -1154,6 +1206,8 @@ def execute_build(
                     f"  [green]v [{task.id}/{total:03d}] {task.title}[/green]"
                     f"  [dim]({result.summary()})[/dim]"
                 )
+                rebuilt_specs.add(task.spec)
+                _store_task_state(task, prompt, result.written_files)
             else:
                 task.status = TaskStatus.FAILED
 
@@ -1205,9 +1259,7 @@ def execute_build(
                     write_plan(plan, plan_filepath)
                     _print_task_header(console, task, total, verbose)
                     try:
-                        retry_result = build_task(
-                            task, config, smd_map, amd_by_spec, console, status, verbose
-                        )
+                        retry_result = build_task(task, config, prompt, console, status, verbose)
                     except AgentRunError as e:
                         task.status = TaskStatus.FAILED
                         write_plan(plan, plan_filepath)
@@ -1218,6 +1270,8 @@ def execute_build(
                         break
                     if retry_result.success:
                         task.status = TaskStatus.DONE
+                        rebuilt_specs.add(task.spec)
+                        _store_task_state(task, prompt, retry_result.written_files)
                         console.log(
                             f"  [green]v [{task.id}/{total:03d}] {task.title} "
                             f"(retry)[/green]  [dim]({retry_result.summary()})[/dim]"

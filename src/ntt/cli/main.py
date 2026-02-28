@@ -122,6 +122,66 @@ def audit(
 
 
 @cli.command()
+@click.pass_context
+def status(ctx: click.Context) -> None:
+    """Show current build progress, completed/pending/failed tasks."""
+    from ntt.cli.commands.status import run_status
+
+    run_status(
+        config_path=ctx.obj["config_path"],
+        console=ctx.obj["console"],
+    )
+
+
+@cli.command()
+@click.option(
+    "--from",
+    "from_task",
+    type=str,
+    default=None,
+    help="Re-run from this task ID onwards",
+)
+@click.option(
+    "--only",
+    type=str,
+    default=None,
+    help="Re-run just this task (and re-verify dependents)",
+)
+@click.pass_context
+def retry(
+    ctx: click.Context,
+    from_task: str | None,
+    only: str | None,
+) -> None:
+    """Re-run failed or invalidated tasks from last build."""
+    from ntt.cli.commands.retry import run_retry
+
+    if from_task and only:
+        ctx.obj["console"].print("[red]Error:[/] --from and --only are mutually exclusive.")
+        raise SystemExit(1)
+
+    run_retry(
+        config_path=ctx.obj["config_path"],
+        verbose=ctx.obj["verbose"],
+        console=ctx.obj["console"],
+        from_task=from_task,
+        only_task=only,
+    )
+
+
+@cli.command()
+@click.pass_context
+def clean(ctx: click.Context) -> None:
+    """Remove .ntt/ state directory (full reset)."""
+    from ntt.cli.commands.clean import run_clean
+
+    run_clean(
+        config_path=ctx.obj["config_path"],
+        console=ctx.obj["console"],
+    )
+
+
+@cli.command()
 @click.option(
     "--step",
     is_flag=True,
