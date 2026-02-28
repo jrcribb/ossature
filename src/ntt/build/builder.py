@@ -10,7 +10,7 @@ from typing import Any
 
 import tomli_w
 from pydantic_ai import Agent, ModelRetry, RunContext
-from pydantic_ai.exceptions import ModelHTTPError
+from pydantic_ai.exceptions import AgentRunError, ModelHTTPError, UsageLimitExceeded
 from pydantic_ai.usage import UsageLimits
 from rich import box
 from rich.console import Console
@@ -803,6 +803,75 @@ def _prompt_after_failure(console: Console, task: PlanTask) -> str:
     return "quit"
 
 
+# LLM error handling
+
+
+def _describe_llm_error(e: AgentRunError) -> tuple[str, str]:
+    if isinstance(e, ModelHTTPError):
+        status = e.status_code
+        if status == 402:
+            return (
+                f"Insufficient API credits (HTTP {status})",
+                "Refill credits and retry.",
+            )
+        if status == 429:
+            return (
+                f"Rate limited (HTTP {status})",
+                "Rate limit retries exhausted. Wait and retry.",
+            )
+        if status >= 500:
+            return (
+                f"API server error (HTTP {status})",
+                "The provider may be experiencing issues. Wait and retry.",
+            )
+        return (
+            f"API error (HTTP {status})",
+            "Check your API configuration and retry.",
+        )
+    if isinstance(e, UsageLimitExceeded):
+        return (
+            "Request limit exceeded",
+            "The task exceeded the maximum number of LLM requests.",
+        )
+    return (e.message, "Check the error and retry.")
+
+
+def _format_llm_error_body(e: AgentRunError) -> str | None:
+    if isinstance(e, ModelHTTPError) and e.body:
+        body = e.body
+        if isinstance(body, dict):
+            msg = (
+                body.get("error", {}).get("message")
+                if isinstance(body.get("error"), dict)
+                else None
+            )
+            return msg or str(body)
+        return str(body)
+    return None
+
+
+def _print_llm_error(console: Console, task: PlanTask, total: int, e: AgentRunError) -> None:
+    summary, suggestion = _describe_llm_error(e)
+    console.print()
+    console.log(f"  [red]x [{task.id}/{total:03d}] {task.title}[/red]")
+
+    lines = [summary]
+    body = _format_llm_error_body(e)
+    if body:
+        lines.append(f"\n{body}")
+    lines.append(f"\n{suggestion}")
+
+    console.print(
+        Panel(
+            "\n".join(lines),
+            title="[bold red]LLM Error[/bold red]",
+            border_style="red",
+            expand=False,
+            box=box.ROUNDED,
+        )
+    )
+
+
 # Setup & tool availability
 
 
@@ -970,7 +1039,14 @@ def execute_build(
             return
         if not all(t.status == TaskStatus.DONE for t in tasks_by_spec[task.spec]):
             return
-        extract_spec_interface(task.spec, plan, config, console, status)
+        try:
+            extract_spec_interface(task.spec, plan, config, console, status)
+        except AgentRunError as e:
+            summary, _ = _describe_llm_error(e)
+            console.log(
+                f"  [yellow]Interface extraction failed for {task.spec}: {summary}[/yellow]"
+            )
+            return
         extracted_interfaces.add(task.spec)
 
     with Status("", console=console) as status:
@@ -1020,15 +1096,56 @@ def execute_build(
 
             _print_task_header(console, task, total, verbose)
 
-            result = build_task(
-                task,
-                config,
-                smd_map,
-                amd_by_spec,
-                console,
-                status,
-                verbose,
-            )
+            # Run task with LLM error recovery
+            llm_bail = False
+            while True:
+                try:
+                    result = build_task(
+                        task, config, smd_map, amd_by_spec, console, status, verbose
+                    )
+                    break
+                except AgentRunError as e:
+                    task.status = TaskStatus.FAILED
+                    write_plan(plan, plan_filepath)
+                    status.stop()
+                    _print_llm_error(console, task, total, e)
+
+                    if mode == BuildMode.AUTO_SKIP:
+                        console.log(
+                            f"  [red]x [{task.id}/{total:03d}] {task.title} "
+                            f"(LLM error, continuing)[/red]"
+                        )
+                        llm_bail = True
+                        status.start()
+                        break
+
+                    if mode == BuildMode.AUTO:
+                        stopped = True
+                        llm_bail = True
+                        status.start()
+                        break
+
+                    action = _prompt_after_failure(console, task)
+                    status.start()
+                    if action == "retry":
+                        task.status = TaskStatus.PENDING
+                        write_plan(plan, plan_filepath)
+                        _print_task_header(console, task, total, verbose)
+                        continue
+                    if action == "skip":
+                        task.status = TaskStatus.SKIPPED
+                        write_plan(plan, plan_filepath)
+                        console.log(f"  [dim][{task.id}/{total:03d}] {task.title} (skipped)[/dim]")
+                    else:
+                        stopped = True
+                    llm_bail = True
+                    break
+
+            if llm_bail:
+                if stopped:
+                    break
+                continue
+
             success = result.success
 
             if success:
@@ -1086,11 +1203,19 @@ def execute_build(
                 if action == "retry":
                     task.status = TaskStatus.PENDING
                     write_plan(plan, plan_filepath)
-                    # Re-run the same task
                     _print_task_header(console, task, total, verbose)
-                    retry_result = build_task(
-                        task, config, smd_map, amd_by_spec, console, status, verbose
-                    )
+                    try:
+                        retry_result = build_task(
+                            task, config, smd_map, amd_by_spec, console, status, verbose
+                        )
+                    except AgentRunError as e:
+                        task.status = TaskStatus.FAILED
+                        write_plan(plan, plan_filepath)
+                        status.stop()
+                        _print_llm_error(console, task, total, e)
+                        status.start()
+                        stopped = True
+                        break
                     if retry_result.success:
                         task.status = TaskStatus.DONE
                         console.log(
@@ -1124,7 +1249,6 @@ def execute_build(
                         f"  [dim][{task.id}/{total:03d}] {task.title} (skipped by user)[/dim]"
                     )
                 else:
-                    # quit
                     console.print()
                     console.print(
                         Panel(
