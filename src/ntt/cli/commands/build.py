@@ -122,4 +122,4 @@ def run_build(
     else:
         mode = BuildMode.DEFAULT
 
-    execute_build(config, plan, smd_map, amd_by_spec, console, plan_filepath, mode)
+    execute_build(config, plan, smd_map, amd_by_spec, console, plan_filepath, mode, verbose)

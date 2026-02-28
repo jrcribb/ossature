@@ -43,11 +43,20 @@ class BuildContext:
     output_dir: Path
     console: Console
     status: Status
+    verbose: bool = False
+    task_label: str = ""
     written_files: list[str] = field(default_factory=list)
     total_lines: int = 0
 
     def __post_init__(self) -> None:
         self.output_dir = self.output_dir.resolve()
+
+    def set_phase(self, phase: str) -> None:
+        self.status.update(f"{self.task_label} {phase}")
+
+    def log_tool(self, message: str) -> None:
+        if self.verbose:
+            self.console.log(message)
 
 
 def _resolve_sandboxed(output_dir: Path, path: str, console: Console) -> Path:
@@ -157,8 +166,8 @@ def _register_tools(agent: Agent[BuildContext, str]) -> None:
         line_count = content.count("\n") + (1 if content and not content.endswith("\n") else 0)
         ctx.deps.total_lines += line_count
         action = "wrote" if is_new else "updated"
-        ctx.deps.status.update(f"Writing {path}")
-        ctx.deps.console.log(f"      {action} [bold]{path}[/bold] ({line_count} lines)")
+        ctx.deps.set_phase(f"-- {action} {path}")
+        ctx.deps.log_tool(f"      {action} [bold]{path}[/bold] ({line_count} lines)")
         return f"Written: {path} ({len(content)} bytes, {line_count} lines)"
 
     @agent.tool
@@ -184,8 +193,8 @@ def _register_tools(agent: Agent[BuildContext, str]) -> None:
             ctx.deps.written_files.append(path)
 
         n_edits = len(json.loads(edits))
-        ctx.deps.status.update(f"Editing {path}")
-        ctx.deps.console.log(f"      edited [bold]{path}[/bold] ({n_edits} edit(s))")
+        ctx.deps.set_phase(f"-- edited {path}")
+        ctx.deps.log_tool(f"      edited [bold]{path}[/bold] ({n_edits} edit(s))")
         return f"Edited: {path} ({n_edits} edit(s) applied)"
 
     @agent.tool
@@ -194,7 +203,7 @@ def _register_tools(agent: Agent[BuildContext, str]) -> None:
         try:
             if not full_path.exists():
                 return f"Error: {path} does not exist"
-            ctx.deps.status.update(f"Reading {path}")
+            ctx.deps.set_phase(f"-- reading {path}")
             return full_path.read_text()
         except OSError as e:
             return f"Error reading {path}: {e}"
@@ -205,7 +214,7 @@ def _register_tools(agent: Agent[BuildContext, str]) -> None:
         try:
             if not full_path.exists():
                 return f"Error: {path} does not exist"
-            ctx.deps.status.update(f"Reading {path}:{start_line}-{end_line}")
+            ctx.deps.set_phase(f"-- reading {path}:{start_line}-{end_line}")
             lines = full_path.read_text().splitlines()
             total = len(lines)
             start = max(1, start_line) - 1
@@ -222,7 +231,7 @@ def _register_tools(agent: Agent[BuildContext, str]) -> None:
         try:
             if not full_path.exists():
                 return f"Error: {path} does not exist"
-            ctx.deps.status.update(f"Searching {path}")
+            ctx.deps.set_phase(f"-- searching {path}")
             lines = full_path.read_text().splitlines()
             compiled = re.compile(pattern, re.IGNORECASE)
             matches: list[str] = []
@@ -251,7 +260,7 @@ def _register_tools(agent: Agent[BuildContext, str]) -> None:
         try:
             if not full_path.is_dir():
                 return f"Error: {directory} is not a directory"
-            ctx.deps.status.update(f"Listing {directory}")
+            ctx.deps.set_phase(f"-- listing {directory}")
             max_entries = 200
             entries = sorted(full_path.iterdir())
             result: list[str] = []
@@ -271,7 +280,7 @@ def _register_tools(agent: Agent[BuildContext, str]) -> None:
     @agent.tool
     def run_command(ctx: RunContext[BuildContext], command: str) -> str:
         _validate_command(command, ctx.deps.console)
-        ctx.deps.status.update(f"Running: {command}")
+        ctx.deps.set_phase(f"-- running: {command}")
         try:
             result = subprocess.run(
                 command,
@@ -627,10 +636,10 @@ def build_task(
     amd_by_spec: dict[str, list[AMDSpec]],
     console: Console,
     status: Status,
+    verbose: bool = False,
 ) -> TaskResult:
     language = config.output.language
     impl_agent = _create_impl_agent(language)
-    fix_agent = _create_fix_agent(language)
 
     slug = make_task_slug(task)
     task_dir = config.metadata_path / "tasks" / f"{task.id}-{slug}"
@@ -639,16 +648,20 @@ def build_task(
     prompt = assemble_task_prompt(task, config, smd_map, amd_by_spec)
     (task_dir / "prompt.md").write_text(prompt)
 
+    task_label = f"[{task.id}] {task.title}"
+
     build_ctx = BuildContext(
         output_dir=config.output_path,
         console=console,
         status=status,
+        verbose=verbose,
+        task_label=task_label,
     )
 
     t0 = time.monotonic()
 
     # Implementation
-    status.update(f"Generating code for {task.title}")
+    build_ctx.set_phase("-- generating...")
     result = _run_with_retry(impl_agent, prompt, build_ctx, console)
     (task_dir / "response.md").write_text(result.output)
 
@@ -665,41 +678,30 @@ def build_task(
         return _make_result(True)
 
     # Verification
-    status.update(f"Verifying: {task.verify}")
+    build_ctx.set_phase(f"-- verifying ({task.verify})")
     passed, verify_output = run_verify(task.verify, config.output_path)
 
     if passed:
-        console.log(f"    [green]✓[/green] {task.verify}")
         save_task_output(task_dir, build_ctx.written_files, True, verify_output)
         return _make_result(True)
 
-    console.log(f"    [red]✗[/red] {task.verify}")
-    _print_verify_errors(console, verify_output)
-
     # Fix loop — fresh agent per attempt to avoid accumulating fix history
     for attempt in range(config.build.max_fix_attempts):
-        console.log(
-            f"    [yellow]↻[/yellow] Fix attempt {attempt + 1}/{config.build.max_fix_attempts}"
-        )
+        build_ctx.set_phase(f"-- fixing ({attempt + 1}/{config.build.max_fix_attempts})")
         fix_prompt = assemble_fix_prompt(task, verify_output, config)
         (task_dir / f"fix-{attempt + 1}-prompt.md").write_text(fix_prompt)
 
-        status.update(f"Fix attempt {attempt + 1}/{config.build.max_fix_attempts} for {task.title}")
         fix_agent = _create_fix_agent(language)
         fix_result = _run_with_retry(fix_agent, fix_prompt, build_ctx, console)
         (task_dir / f"fix-{attempt + 1}-response.md").write_text(fix_result.output)
 
-        status.update(f"Re-verifying: {task.verify}")
+        build_ctx.set_phase(f"-- re-verifying ({task.verify})")
         passed, verify_output = run_verify(task.verify, config.output_path)
         if passed:
-            console.log(f"    [green]✓[/green] {task.verify} (fixed on attempt {attempt + 1})")
             save_task_output(task_dir, build_ctx.written_files, True, verify_output)
             return _make_result(True)
 
-        console.log(
-            f"    [red]✗[/red] still failing ({attempt + 1}/{config.build.max_fix_attempts})"
-        )
-
+    # Only show errors after all fix attempts exhausted
     _print_verify_errors(console, verify_output)
     save_task_output(task_dir, build_ctx.written_files, False, verify_output)
     return _make_result(False)
@@ -708,15 +710,16 @@ def build_task(
 # Console output helpers
 
 
-def _print_task_header(console: Console, task: PlanTask, total: int) -> None:
-    console.print()
-    header = Text()
-    header.append(f"  [{task.id}/{total:03d}] ", style="bold cyan")
-    header.append(task.title, style="bold")
-    console.print(header)
-    console.print(f"    [dim]{task.description}[/dim]")
-    if task.outputs:
-        console.print(f"    [dim]→ {', '.join(task.outputs)}[/dim]")
+def _print_task_header(console: Console, task: PlanTask, total: int, verbose: bool = False) -> None:
+    if verbose:
+        console.print()
+        header = Text()
+        header.append(f"  [{task.id}/{total:03d}] ", style="bold cyan")
+        header.append(task.title, style="bold")
+        console.print(header)
+        console.print(f"    [dim]{task.description}[/dim]")
+        if task.outputs:
+            console.print(f"    [dim]-> {', '.join(task.outputs)}[/dim]")
 
 
 # Interactive prompts
@@ -878,6 +881,7 @@ def execute_build(
     console: Console,
     plan_filepath: Path,
     mode: BuildMode = BuildMode.DEFAULT,
+    verbose: bool = False,
 ) -> None:
     config.output_path.mkdir(parents=True, exist_ok=True)
 
@@ -938,7 +942,7 @@ def execute_build(
                 stopped = True
                 break
 
-            _print_task_header(console, task, total)
+            _print_task_header(console, task, total, verbose)
 
             result = build_task(
                 task,
@@ -947,6 +951,7 @@ def execute_build(
                 amd_by_spec,
                 console,
                 status,
+                verbose,
             )
             success = result.success
 
@@ -1003,8 +1008,10 @@ def execute_build(
                     task.status = TaskStatus.PENDING
                     write_plan(plan, plan_filepath)
                     # Re-run the same task
-                    _print_task_header(console, task, total)
-                    retry_result = build_task(task, config, smd_map, amd_by_spec, console, status)
+                    _print_task_header(console, task, total, verbose)
+                    retry_result = build_task(
+                        task, config, smd_map, amd_by_spec, console, status, verbose
+                    )
                     if retry_result.success:
                         task.status = TaskStatus.DONE
                         console.log(
