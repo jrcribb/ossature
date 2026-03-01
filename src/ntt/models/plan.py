@@ -19,6 +19,7 @@ class PlannerTask(BaseModel):
     spec_refs: list[str]
     arch_refs: list[str]
     verify: str
+    context_files: list[str] = []
 
 
 class SpecTaskPlan(BaseModel):
@@ -38,6 +39,7 @@ class PlanTask(BaseModel):
     verify: str
     inject_files: list[str] = []
     cross_spec_interfaces: list[str] = []
+    context_files: list[str] = []
     notes: str = ""
 
 

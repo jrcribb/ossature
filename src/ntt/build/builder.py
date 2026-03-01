@@ -8,6 +8,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
+import content_types
 import tomli_w
 from pydantic_ai import Agent, ModelRetry, RunContext
 from pydantic_ai.exceptions import AgentRunError, ModelHTTPError, UsageLimitExceeded
@@ -58,6 +59,7 @@ class BuildContext:
     console: Console
     status: Status
     verbose: bool = False
+    context_dir: Path | None = None
     task_label: str = ""
     written_files: list[str] = field(default_factory=list)
     total_lines: int = 0
@@ -315,6 +317,52 @@ def _register_tools(agent: Agent[BuildContext, str]) -> None:
             output += result.stderr
         return f"Exit code: {result.returncode}\n{output}"
 
+    @agent.tool
+    def copy_context_file(ctx: RunContext[BuildContext], context_path: str, dest_path: str) -> str:
+        """Copy a file from the context directory to the output directory."""
+        if ctx.deps.context_dir is None:
+            return "Error: no context directory configured for this project"
+        src = (ctx.deps.context_dir / context_path).resolve()
+        if not src.is_relative_to(ctx.deps.context_dir.resolve()):
+            raise ModelRetry(
+                f"Access denied: '{context_path}' resolves outside the context directory. "
+                f"Use a relative path within the context directory."
+            )
+        if not src.exists():
+            return f"Error: context file '{context_path}' does not exist"
+        dest = _resolve_sandboxed(ctx.deps.output_dir, dest_path, ctx.deps.console)
+        try:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(str(src), str(dest))
+        except OSError as e:
+            return f"Error copying {context_path} to {dest_path}: {e}"
+        if dest_path not in ctx.deps.written_files:
+            ctx.deps.written_files.append(dest_path)
+        ctx.deps.set_phase(f"-- copied context:{context_path} → {dest_path}")
+        ctx.deps.log_tool(f"      copied [bold]{context_path}[/bold] → [bold]{dest_path}[/bold]")
+        return f"Copied: {context_path} → {dest_path}"
+
+    @agent.tool
+    def read_context_file(ctx: RunContext[BuildContext], context_path: str) -> str:
+        """Read a text file from the context directory."""
+        if ctx.deps.context_dir is None:
+            return "Error: no context directory configured for this project"
+        src = (ctx.deps.context_dir / context_path).resolve()
+        if not src.is_relative_to(ctx.deps.context_dir.resolve()):
+            raise ModelRetry(
+                f"Access denied: '{context_path}' resolves outside the context directory. "
+                f"Use a relative path within the context directory."
+            )
+        if not src.exists():
+            return f"Error: context file '{context_path}' does not exist"
+        ctx.deps.set_phase(f"-- reading context:{context_path}")
+        try:
+            return src.read_text()
+        except UnicodeDecodeError:
+            return f"Error: '{context_path}' is a binary file — use copy_context_file instead"
+        except OSError as e:
+            return f"Error reading context file '{context_path}': {e}"
+
 
 def _create_impl_agent(language: str) -> Agent[BuildContext, str]:
     agent: Agent[BuildContext, str] = Agent(
@@ -541,6 +589,50 @@ def assemble_task_prompt(
         if iface_sections:
             sections.append("## Cross-Spec Interfaces\n\n" + "\n\n".join(iface_sections))
 
+    # Context files
+    if task.context_files:
+        context_file_entries: list[str] = []
+        for cf in task.context_files:
+            cf_path = config.context_path / cf
+            if not cf_path.exists():
+                context_file_entries.append(f"- `{cf}` — not found")
+                continue
+            mime_type = content_types.get_content_type(cf_path.name)
+            size = cf_path.stat().st_size
+            is_text = mime_type.startswith("text/") or mime_type in {
+                "application/json",
+                "application/xml",
+                "application/toml",
+                "application/yaml",
+            }
+            if is_text:
+                try:
+                    content = cf_path.read_text()
+                    context_file_entries.append(
+                        f"### {cf}\n\n"
+                        f"**MIME type:** `{mime_type}` ({size} bytes)\n\n"
+                        f"```\n{content}\n```"
+                    )
+                except UnicodeDecodeError:
+                    context_file_entries.append(
+                        f"- `{cf}` — `{mime_type}` ({size} bytes) — "
+                        f"use `read_context_file` or `copy_context_file` to access"
+                    )
+            else:
+                context_file_entries.append(f"- `{cf}` — `{mime_type}` ({size} bytes)")
+
+        if context_file_entries:
+            sections.append(
+                "## Context Files\n\n"
+                "The following files from the project's context directory are assigned "
+                "to this task. Use `copy_context_file(context_path, dest_path)` to copy "
+                "assets into the appropriate location within the output directory "
+                "(choose a destination path that fits the project structure, e.g. "
+                "`assets/audio/music.mp3` or `sounds/correct.wav`). "
+                "Use `read_context_file(context_path)` to read text files on demand.\n\n"
+                + "\n\n".join(context_file_entries)
+            )
+
     return "\n\n---\n\n".join(sections)
 
 
@@ -712,6 +804,7 @@ def build_task(
         console=console,
         status=status,
         verbose=verbose,
+        context_dir=config.context_path if config.context_path.is_dir() else None,
         task_label=task_label,
     )
 

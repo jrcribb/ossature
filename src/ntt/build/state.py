@@ -43,6 +43,11 @@ def compute_input_hash(prompt: str, task: PlanTask, config: NTTConfig) -> str:
         if full_path.exists():
             hasher.update(filepath.encode())
             hasher.update(full_path.read_bytes())
+    for filepath in sorted(task.context_files):
+        full_path = config.context_path / filepath
+        if full_path.exists():
+            hasher.update(f"context:{filepath}".encode())
+            hasher.update(full_path.read_bytes())
     return f"sha256:{hasher.hexdigest()}"
 
 

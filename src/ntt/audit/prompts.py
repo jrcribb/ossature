@@ -123,6 +123,8 @@ PLAN_GENERATION_SYSTEM_PROMPT: Final[str] = (
     "- arch_refs: list of architecture section names relevant to this task "
     "(empty if no AMD provided)\n"
     "- verify: shell command to verify the output compiles/passes\n"
+    "- context_files: list of filenames from the context directory that this task needs "
+    "(empty if none). Only assign files that are directly relevant to the task.\n"
 )
 
 INTERFACE_INFERENCE_SYSTEM_PROMPT: Final[str] = (

@@ -2,6 +2,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+import content_types
 import tomli
 import tomli_w
 from pydantic_ai import Agent
@@ -22,6 +23,7 @@ def generate_spec_plan(
     smd: SMDSpec,
     amds: list[AMDSpec] | None,
     audit_report: SpecAuditReport | None,
+    context_inventory: list[str] | None = None,
 ) -> SpecTaskPlan:
     agent = Agent(
         PLANNER_MODEL,
@@ -53,6 +55,23 @@ def generate_spec_plan(
             f"The following setup command runs before the first task:\n"
             f"```\n{config.build.setup}\n```\n"
             f"Do not generate tasks that duplicate what this command does."
+        )
+
+    if context_inventory:
+        file_lines = []
+        for f in context_inventory:
+            mime_type = content_types.get_content_type(f)
+            file_lines.append(f"- `{f}` ({mime_type})")
+        sections.append(
+            "\n## Context Files\n\n"
+            "The following files are available in the project's context directory. "
+            "These are pre-existing assets (audio, images, reference code, documentation, etc.) "
+            "that may be useful during implementation.\n\n" + "\n".join(file_lines) + "\n\n"
+            "For each task, list any context files it needs in the `context_files` field. "
+            "The build system will include text files in the prompt and provide tools "
+            "for the implementer to copy binary assets to the appropriate location "
+            "within the output directory (e.g. an `assets/` or `sounds/` subdirectory, "
+            "wherever fits the project structure)."
         )
 
     result = agent.run_sync("\n".join(sections))
@@ -126,6 +145,7 @@ def merge_into_global_plan(
                     verify=planner_task.verify,
                     inject_files=inject_files,
                     cross_spec_interfaces=cross_spec_interfaces,
+                    context_files=list(planner_task.context_files),
                 )
                 all_tasks.append(task)
 
@@ -157,6 +177,12 @@ def generate_plan(
 ) -> Plan:
     spec_plans: dict[str, SpecTaskPlan] = {}
 
+    context_inventory: list[str] = []
+    if config.context_path.is_dir():
+        for p in sorted(config.context_path.rglob("*")):
+            if p.is_file():
+                context_inventory.append(str(p.relative_to(config.context_path)))
+
     for level in graph.levels:
         for spec_id in level:
             smd = next((s for s in parsed_smds if s.spec_id == spec_id), None)
@@ -166,7 +192,13 @@ def generate_plan(
             amds = amd_by_spec.get(spec_id)
             audit_report = spec_reports.get(spec_id)
 
-            spec_plan = generate_spec_plan(config, smd, amds, audit_report)
+            spec_plan = generate_spec_plan(
+                config,
+                smd,
+                amds,
+                audit_report,
+                context_inventory=context_inventory or None,
+            )
             spec_plans[spec_id] = spec_plan
 
     return merge_into_global_plan(spec_plans, graph, parsed_smds)
@@ -199,6 +231,8 @@ def write_plan(plan: Plan, filepath: Path) -> None:
             task_dict["inject_files"] = task.inject_files
         if task.cross_spec_interfaces:
             task_dict["cross_spec_interfaces"] = task.cross_spec_interfaces
+        if task.context_files:
+            task_dict["context_files"] = task.context_files
         if task.notes:
             task_dict["notes"] = task.notes
         data["task"].append(task_dict)
@@ -237,6 +271,7 @@ def load_plan(filepath: Path) -> Plan | None:
             verify=t["verify"],
             inject_files=t.get("inject_files", []),
             cross_spec_interfaces=t.get("cross_spec_interfaces", []),
+            context_files=t.get("context_files", []),
             notes=t.get("notes", ""),
         )
         for t in data.get("task", [])
@@ -267,6 +302,8 @@ def write_task_definitions(plan: Plan, tasks_dir: Path) -> None:
             task_data["inject_files"] = task.inject_files
         if task.cross_spec_interfaces:
             task_data["cross_spec_interfaces"] = task.cross_spec_interfaces
+        if task.context_files:
+            task_data["context_files"] = task.context_files
         if task.notes:
             task_data["notes"] = task.notes
 

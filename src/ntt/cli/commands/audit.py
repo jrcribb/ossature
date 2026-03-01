@@ -131,7 +131,7 @@ def present_findings_and_confirm(
 
     if (
         some_errors
-        and questionary.confirm(
+        and not questionary.confirm(
             f"Audit found {counts[Severity.ERROR]} error(s). Continue?", default=False
         ).ask()
     ):
