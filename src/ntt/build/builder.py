@@ -515,23 +515,14 @@ def assemble_task_prompt(
     # Project brief
     brief_path = config.metadata_context_path / "project-brief.md"
     if brief_path.exists():
-        sections.append(f"## Project Brief\n\n{brief_path.read_text().strip()}")
+        sections.append(f"<project_brief>\n{brief_path.read_text().strip()}\n</project_brief>")
 
     # Spec brief
     spec_brief_path = config.metadata_context_spec_briefs_path / f"{task.spec}.md"
     if spec_brief_path.exists():
-        sections.append(f"## Spec Brief: {task.spec}\n\n{spec_brief_path.read_text().strip()}")
-
-    # Task description
-    task_section = f"## Task: {task.title}\n\n{task.description}"
-    if task.notes:
-        task_section += f"\n\n**Notes:** {task.notes}"
-    sections.append(task_section)
-
-    # Files to produce
-    if task.outputs:
-        outputs_list = "\n".join(f"- `{o}`" for o in task.outputs)
-        sections.append(f"## Files to Produce\n\n{outputs_list}")
+        sections.append(
+            f'<spec_brief spec="{task.spec}">\n{spec_brief_path.read_text().strip()}\n</spec_brief>'
+        )
 
     # Filtered spec sections (via spec_refs)
     smd = smd_map.get(task.spec)
@@ -545,7 +536,9 @@ def assemble_task_prompt(
             if rendered:
                 spec_parts.append(rendered)
         if spec_parts:
-            sections.append("## Specification Context\n\n" + "\n\n".join(spec_parts))
+            sections.append(
+                "<specification_context>\n" + "\n\n".join(spec_parts) + "\n</specification_context>"
+            )
 
     # Filtered arch sections (via arch_refs)
     amds = amd_by_spec.get(task.spec)
@@ -559,7 +552,9 @@ def assemble_task_prompt(
             if rendered:
                 arch_parts.append(rendered)
         if arch_parts:
-            sections.append("## Architecture Context\n\n" + "\n\n".join(arch_parts))
+            sections.append(
+                "<architecture_context>\n" + "\n\n".join(arch_parts) + "\n</architecture_context>"
+            )
 
     # Inject files — list available dependency files for tool-based exploration
     if task.inject_files:
@@ -586,10 +581,12 @@ def assemble_task_prompt(
                     available.append(f"- `{filepath}` (`{mime_type}`, {size} bytes, binary)")
         if available:
             sections.append(
-                "## Dependency Files\n\n"
+                "<dependency_files>\n"
                 "The following files from previous tasks are available. "
                 "Use `grep_file` and `read_lines` to inspect the types, "
-                "interfaces, and signatures you need.\n\n" + "\n".join(available)
+                "interfaces, and signatures you need.\n\n"
+                + "\n".join(available)
+                + "\n</dependency_files>"
             )
 
     # Cross-spec interfaces
@@ -599,10 +596,14 @@ def assemble_task_prompt(
             iface_path = config.metadata_context_interfaces_path / f"{spec_id}.md"
             if iface_path.exists():
                 iface_sections.append(
-                    f"### {spec_id} Interface\n\n{iface_path.read_text().strip()}"
+                    f'<interface spec="{spec_id}">\n{iface_path.read_text().strip()}\n</interface>'
                 )
         if iface_sections:
-            sections.append("## Cross-Spec Interfaces\n\n" + "\n\n".join(iface_sections))
+            sections.append(
+                "<cross_spec_interfaces>\n"
+                + "\n\n".join(iface_sections)
+                + "\n</cross_spec_interfaces>"
+            )
 
     # Context files
     if task.context_files:
@@ -638,7 +639,7 @@ def assemble_task_prompt(
 
         if context_file_entries:
             sections.append(
-                "## Context Files\n\n"
+                "<context_files>\n"
                 "The following files from the project's context directory are assigned "
                 "to this task. Use `copy_context_file(context_path, dest_path)` to copy "
                 "assets into the appropriate location within the output directory "
@@ -646,23 +647,36 @@ def assemble_task_prompt(
                 "`assets/audio/music.mp3` or `sounds/correct.wav`). "
                 "Use `read_context_file(context_path)` to read text files on demand.\n\n"
                 + "\n\n".join(context_file_entries)
+                + "\n</context_files>"
             )
 
-    return "\n\n---\n\n".join(sections)
+    # Task description — placed last so the query follows all context
+    task_block = f"<task>\n## {task.title}\n\n{task.description}"
+    if task.notes:
+        task_block += f"\n\n**Notes:** {task.notes}"
+    if task.outputs:
+        outputs_list = "\n".join(f"- `{o}`" for o in task.outputs)
+        task_block += f"\n\n## Files to Produce\n\n{outputs_list}"
+    task_block += "\n</task>"
+    sections.append(task_block)
+
+    return "\n\n".join(sections)
 
 
 def assemble_fix_prompt(task: PlanTask, error_output: str, config: NTTConfig) -> str:
-    sections = [f"## Error Output\n\n```\n{error_output}\n```"]
+    sections = [f"<error_output>\n```\n{error_output}\n```\n</error_output>"]
 
     for filepath in task.outputs:
         full_path = config.output_path / filepath
         if full_path.exists():
             content = full_path.read_text()
-            sections.append(f"## Current File: {filepath}\n\n```\n{content}\n```")
+            sections.append(
+                f'<current_file path="{filepath}">\n```\n{content}\n```\n</current_file>'
+            )
 
-    sections.append(f"## Original Task\n\n**{task.title}**: {task.description}")
+    sections.append(f"<task>\n**{task.title}**: {task.description}\n</task>")
 
-    return "\n\n---\n\n".join(sections)
+    return "\n\n".join(sections)
 
 
 # Verification

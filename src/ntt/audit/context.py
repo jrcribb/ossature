@@ -51,16 +51,20 @@ def format_smd_specs_overviews(specs: list[SMDSpec]) -> str:
 
 def generate_project_brief(config: NTTConfig, parsed_smds: list[SMDSpec]) -> Brief:
     system_prompt = (
+        "<role>\n"
         "You are a technical writer creating a project summary for an LLM code generation system.\n"
+        "</role>\n\n"
+        "<instructions>\n"
         "Given the overview sections of all specs in a project, write a single paragraph "
-        "(~200 words) that captures:"
+        "(~200 words) that captures:\n"
         "- What the project does\n"
         "- The main modules/specs and their responsibilities\n"
         "- Key technologies and frameworks\n"
-        "- How the modules connect\n"
+        "- How the modules connect\n\n"
         "Write in present tense, be concrete, avoid marketing language.\n"
         "This summary will be included in every code generation prompt "
         "to provide project context.\n"
+        "</instructions>\n\n"
         "Output only the brief, no preamble."
     )
 
@@ -78,14 +82,18 @@ def generate_project_brief(config: NTTConfig, parsed_smds: list[SMDSpec]) -> Bri
 
 def generate_spec_briefs(config: NTTConfig, parsed_smds: list[SMDSpec]) -> dict[str, Brief]:
     system_prompt = (
+        "<role>\n"
         "You are a technical writer creating a module "
         "summary for an LLM code generation system.\n"
+        "</role>\n\n"
+        "<instructions>\n"
         "Given a specification document (SMD), write 2-3 sentences that capture:\n"
         "- What this module does\n"
         "- Its key responsibilities\n"
-        "- What it integrates with\n"
+        "- What it integrates with\n\n"
         "Be concrete and technical. This summary provides context during code "
         "generation for related modules.\n"
+        "</instructions>\n\n"
         "Output only the brief, no preamble."
     )
 

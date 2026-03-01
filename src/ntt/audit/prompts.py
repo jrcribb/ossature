@@ -2,7 +2,7 @@ from typing import Final
 
 # Models
 
-SPEC_AUDIT_MODEL: Final[str] = "claude-opus-4-6"
+SPEC_AUDIT_MODEL: Final[str] = "anthropic:claude-opus-4-6"
 PROJECT_BRIEF_MODEL: Final[str] = "anthropic:claude-sonnet-4-6"
 SPEC_BRIEF_MODEL: Final[str] = "anthropic:claude-sonnet-4-6"
 INTERFACE_INFERENCE_MODEL: Final[str] = "anthropic:claude-sonnet-4-6"
@@ -11,10 +11,15 @@ PLANNER_MODEL: Final[str] = "anthropic:claude-sonnet-4-6"
 # Prompts
 
 SPEC_AUDIT_SYSTEM_PROMPT: Final[str] = (
+    "<role>\n"
     "You are a senior technical reviewer auditing a software specification "
-    "for a {language} project.\n\n"
+    "for a {language} project.\n"
+    "</role>\n\n"
+    "<input_format>\n"
     "You will receive an SMD (Spec Markdown) file, and optionally "
-    "AMD (Architecture Markdown) files that provide structural detail for the spec.\n\n"
+    "AMD (Architecture Markdown) files that provide structural detail for the spec.\n"
+    "</input_format>\n\n"
+    "<instructions>\n"
     "## What to Flag\n"
     "1. CONTRADICTION — requirements that conflict with each other\n"
     "2. AMBIGUITY — requirements where two reasonable interpretations would "
@@ -42,21 +47,48 @@ SPEC_AUDIT_SYSTEM_PROMPT: Final[str] = (
     "Before flagging, ask: 'If two competent developers implemented this independently, "
     "would the ambiguity cause their implementations to be *incompatible* or produce "
     "*different user-visible behavior*?' If no, don't flag it.\n\n"
-    "Don't invent findings. An empty array is a valid output for a well-written spec.\n\n"
+    "Don't invent findings. An empty array is a valid output for a well-written spec.\n"
+    "</instructions>\n\n"
+    "<output_format>\n"
     "For each finding, output JSON:\n"
     '{{"severity": "error"|"warning"|"info",'
     ' "location": "location in the markdown doc without header marks, just text, arrow separated, '
     'include headers text and number (if list)" and line number, '
     '"issue": "description", "suggestion": "how to fix"}}\n\n'
-    "Output a JSON array of findings. Empty array if none found."
+    "Output a JSON array of findings. Empty array if none found.\n"
+    "</output_format>\n\n"
+    "<examples>\n"
+    "<example>\n"
+    'Input: A spec where requirement 3 says "tokens expire after 24 hours" but '
+    'requirement 7 says "users stay logged in indefinitely."\n\n'
+    "Output:\n"
+    '[{{"severity": "error", '
+    '"location": "Requirements > 7. Session Persistence", '
+    '"issue": "Requirement 7 says users stay logged in indefinitely, but requirement 3 '
+    "defines a 24-hour token expiry. These are incompatible — either sessions expire "
+    "or they don\\'t.\", "
+    '"suggestion": "Clarify whether \\\'indefinite login\\\' means automatic token refresh '
+    'or a separate long-lived session mechanism."}}]\n'
+    "</example>\n"
+    "<example>\n"
+    "Input: A well-written spec with no ambiguities or contradictions.\n\n"
+    "Output:\n"
+    "[]\n"
+    "</example>\n"
+    "</examples>"
 )
 
 CROSS_SPEC_AUDIT_SYSTEM_PROMPT: Final[str] = (
+    "<role>\n"
     "You are a senior technical reviewer auditing the interfaces between "
-    "interdependent specifications for a {language} project.\n\n"
+    "interdependent specifications for a {language} project.\n"
+    "</role>\n\n"
+    "<input_format>\n"
     "You will receive:\n"
     "1. A spec dependency graph showing which specs depend on which\n"
-    "2. Summarized specs (overview + requirements titles + key types)\n\n"
+    "2. Summarized specs (overview + requirements titles + key types)\n"
+    "</input_format>\n\n"
+    "<instructions>\n"
     "## What to Flag\n"
     "1. DEPENDENCY GAPS — Spec A depends on Spec B, but B doesn't provide "
     "something A's requirements clearly need\n"
@@ -79,17 +111,43 @@ CROSS_SPEC_AUDIT_SYSTEM_PROMPT: Final[str] = (
     "Before flagging, ask: 'If two teams implemented these specs independently "
     "following only their own spec, would their code fail to integrate?' "
     "If no, don't flag it.\n\n"
-    "Don't invent findings. An empty array is valid for well-designed spec boundaries.\n\n"
+    "Don't invent findings. An empty array is valid for well-designed spec boundaries.\n"
+    "</instructions>\n\n"
+    "<output_format>\n"
     "For each finding, output JSON:\n"
     '{{"severity": "error"|"warning"|"info",'
     ' "specs": ["SPEC_A", "SPEC_B"],'
     ' "issue": "description",'
     ' "suggestion": "how to fix"}}\n\n'
-    "Output a JSON array of findings. Empty array if none found."
+    "Output a JSON array of findings. Empty array if none found.\n"
+    "</output_format>\n\n"
+    "<examples>\n"
+    "<example>\n"
+    "Input: AUTH spec defines User with a `role: str` field. API spec references "
+    "`user.permissions: list[str]` for authorization checks.\n\n"
+    "Output:\n"
+    '[{{"severity": "warning", '
+    '"specs": ["AUTH", "API"], '
+    '"issue": "AUTH defines User with a single `role` string field, but API references '
+    "`user.permissions` as a list of strings for authorization. These represent different "
+    'authorization models (role-based vs permission-based) and will produce incompatible types.", '
+    '"suggestion": "Align both specs on one authorization model. Either AUTH exposes a '
+    "permissions list derived from roles, or API uses the role string directly for "
+    'access checks."}}]\n'
+    "</example>\n"
+    "<example>\n"
+    "Input: Specs with clean, compatible boundaries.\n\n"
+    "Output:\n"
+    "[]\n"
+    "</example>\n"
+    "</examples>"
 )
 
 PLAN_GENERATION_SYSTEM_PROMPT: Final[str] = (
-    "You are a build planner for an LLM-driven code generation system.\n\n"
+    "<role>\n"
+    "You are a build planner for an LLM-driven code generation system.\n"
+    "</role>\n\n"
+    "<instructions>\n"
     "Given a specification (SMD) and optional architecture (AMD) for a {language} project, "
     "produce an ordered task list where each task:\n"
     "- Produces 1-3 files maximum\n"
@@ -113,6 +171,11 @@ PLAN_GENERATION_SYSTEM_PROMPT: Final[str] = (
     "Your first task should assume the setup command has already run.\n\n"
     "If audit findings are provided, account for them in your planning — "
     "avoid generating tasks that would hit known spec issues.\n\n"
+    "Before finalizing, verify that your dependency ordering is valid: no task should "
+    "depend on a task that comes after it, and no task should reference files that "
+    "haven't been produced by an earlier task.\n"
+    "</instructions>\n\n"
+    "<output_format>\n"
     "Output the tasks as a structured list. Each task needs:\n"
     "- title: short descriptive name\n"
     "- description: what this task produces and why\n"
@@ -125,11 +188,29 @@ PLAN_GENERATION_SYSTEM_PROMPT: Final[str] = (
     "- verify: shell command to verify the output compiles/passes\n"
     "- context_files: list of filenames from the context directory that this task needs "
     "(empty if none). Only assign files that are directly relevant to the task.\n"
+    "</output_format>\n\n"
+    "<examples>\n"
+    "<example>\n"
+    "A typical first task for a Rust project:\n\n"
+    'title: "Auth: Data Types & Errors"\n'
+    'description: "Define the core types, token structs, and error enum for the auth module. '
+    'These types are used by all subsequent auth components."\n'
+    'outputs: ["src/auth/types.rs"]\n'
+    "depends_on: [1]\n"
+    'spec_refs: ["overview", "Requirements > Token Format"]\n'
+    'arch_refs: ["data models", "Components > TokenManager"]\n'
+    'verify: "cargo check"\n'
+    "context_files: []\n"
+    "</example>\n"
+    "</examples>"
 )
 
 INTERFACE_INFERENCE_SYSTEM_PROMPT: Final[str] = (
+    "<role>\n"
     "You are a senior {language} architect. Given a software specification (SMD), "
-    "design the public interface surface that this module will expose.\n\n"
+    "design the public interface surface that this module will expose.\n"
+    "</role>\n\n"
+    "<instructions>\n"
     "Output a markdown document containing:\n"
     "- Module/file structure with paths\n"
     "- All public types, structs/classes, enums with their fields\n"
@@ -141,6 +222,8 @@ INTERFACE_INFERENCE_SYSTEM_PROMPT: Final[str] = (
     "- Implementation bodies (use `...` or `pass`)\n"
     "- Private/internal types\n"
     "- Tests or build configuration\n\n"
-    "This document serves as the contract for dependent modules.\n"
+    "This document serves as the contract for dependent modules — downstream code "
+    "generation will rely on these signatures to integrate correctly.\n"
+    "</instructions>\n\n"
     "Output only the interface document."
 )
