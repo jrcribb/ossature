@@ -567,8 +567,23 @@ def assemble_task_prompt(
         for filepath in task.inject_files:
             full_path = config.output_path / filepath
             if full_path.exists():
-                line_count = len(full_path.read_text().splitlines())
-                available.append(f"- `{filepath}` ({line_count} lines)")
+                mime_type = content_types.get_content_type(full_path.name)
+                is_text = mime_type.startswith("text/") or mime_type in {
+                    "application/json",
+                    "application/xml",
+                    "application/toml",
+                    "application/yaml",
+                }
+                if is_text:
+                    try:
+                        line_count = len(full_path.read_text().splitlines())
+                        available.append(f"- `{filepath}` ({line_count} lines)")
+                    except UnicodeDecodeError, ValueError:
+                        size = full_path.stat().st_size
+                        available.append(f"- `{filepath}` (`{mime_type}`, {size} bytes, binary)")
+                else:
+                    size = full_path.stat().st_size
+                    available.append(f"- `{filepath}` (`{mime_type}`, {size} bytes, binary)")
         if available:
             sections.append(
                 "## Dependency Files\n\n"
