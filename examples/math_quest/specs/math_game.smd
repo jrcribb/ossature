@@ -1,0 +1,202 @@
+# Math Quest — A Math Game for Kids
+
+@id: MATH_QUEST
+@status: draft
+@priority: high
+@depends: []
+
+## Overview
+
+A simple LÖVE2D game for children that presents arithmetic problems and asks the player to type the answer. The player starts with a fixed number of lives and earns points for each correct answer. Problems get progressively harder as the score increases. The visual style uses large, colorful text on a dark background with a continuous animated particle effect to keep things lively. No background music needed, but some sound effects for answer feedback, using audio assets provided in the context directory.
+
+## Goals
+
+- Provide a fun, distraction-free math practice game for kids aged 6-12
+- Run as a standalone LÖVE2D application with no external image or font assets (audio assets are bundled)
+- Keep the codebase minimal (3 Lua modules or fewer)
+
+## Non-Goals
+
+- Multiplayer or networking
+- Persistent high scores or save files
+- Image/sprite assets
+- Configurable difficulty settings (difficulty scales automatically)
+
+## Requirements
+
+### Game States
+
+The game has three states: title, playing, and game-over.
+
+**Accepts:** None (state transitions driven by player input)
+
+**Returns:** The appropriate screen rendered for the current state
+
+**Title state:** Display the game name "Math Quest" in large centered text with "Press Enter to Start" below it. The background animation runs in all states.
+
+**Playing state:** Show the current problem, an input field for the player's answer, the current score, and remaining lives. A countdown timer (configurable, default 10 seconds) ticks down for each problem. If the timer expires, it counts as a wrong answer.
+
+**Game-over state:** Display "Game Over", the final score, and "Press Enter to Play Again". Pressing Enter returns to the title state.
+
+### Problem Generation
+
+Generate arithmetic problems appropriate to the player's current level.
+
+**Accepts:** Current score (integer, used to determine level)
+
+**Returns:** A problem with a display string and its correct integer answer
+
+**Level 1 (score 0-4):** Addition and subtraction with operands 1-10.
+**Level 2 (score 5-14):** Addition and subtraction with operands 1-50, plus multiplication with operands 1-10.
+**Level 3 (score 15+):** Addition and subtraction with operands 1-100, multiplication with operands 1-12.
+
+All problems must have non-negative integer answers. Subtraction problems must have the larger operand first (no negative results). Division is excluded entirely.
+
+- Scores 0-4 = addition with single-digit operands
+- Scores 5-9 = addition/subtraction with two-digit operands
+- Scores 10-14 = multiplication with single-digit operands
+- Scores 15+ = mixed operations with larger numbers
+
+### Input Handling
+
+The player types their answer using number keys (0-9). Backspace deletes the last digit. Enter submits the answer. The current typed input is displayed below the problem in large text. Negative answers are not accepted (minus key is ignored).
+
+**Accepts:** Keyboard events (number keys 0-9, Backspace, Enter)
+
+**Returns:** Updated input buffer displayed below the problem; answer submission on Enter
+
+### Scoring and Lives
+
+The player starts with 3 lives. A correct answer adds 1 to the score. A wrong answer (including timer expiry) removes 1 life. When lives reach 0, transition to game-over state. Display a brief visual feedback on answer: green flash for correct, red flash for wrong. Timer expiry submits the current input buffer for evaluation, if empty then consider it always wrong.
+
+**Accepts:** Player's submitted answer (integer)
+
+**Returns:** Updated score and lives; visual feedback (green flash for correct, red flash for wrong)
+
+### Background Animation
+
+A continuous particle animation runs behind all game states. Small colored circles (or dots) drift slowly across the screen in random directions, fading in and out. Use at least 5 distinct soft colors. New particles spawn at random positions at a steady rate. This is purely decorative and must not interfere with text readability.
+
+**Accepts:** Delta time (float, seconds since last frame)
+
+**Returns:** Rendered particle layer behind all UI elements
+
+### Audio
+
+No background music needed.
+
+**Accepts:** Game events (correct answer, wrong answer)
+
+**Returns:** Audio playback
+
+**Background music:** None
+
+**Correct answer sound (`correct.wav`):** Plays once when the player submits a correct answer.
+
+**Wrong answer sound (`wrong.wav`):** Plays once when the player submits a wrong answer or the timer expires.
+
+Audio assets are provided in the context directory and must be copied to the output directory during build. They are loaded at startup via `love.audio.newSource`.
+
+### Window Configuration
+
+The game window is 1280×720, non-resizable, with the title "Math Quest".
+
+**Accepts:** None (static configuration)
+
+**Returns:** LÖVE2D window configured at launch
+
+### No tests required
+
+Don't generate any test code for this, as this is a game we don't need to generate test code.
+
+**Accepts:** None
+
+**Returns:** None
+
+## Constraints
+
+- All rendering uses LÖVE2D's built-in drawing API and default font (scaled up) — no external font files
+- The game must run with `love .` from the output directory
+- All state (score, lives, current problem) is in-memory only — no file I/O during gameplay
+- Timer per problem is 10 seconds
+- Minimum font size for the problem text is 48px; answer input is 36px
+- Background animation must run at a consistent frame rate independent of the game state
+- All generated problems must have non-negative integer answers (e.g., for subtraction, ensure the first operand is >= the second operand)
+
+## Examples
+
+### Title Screen
+
+**Input:**
+
+```
+love .
+```
+
+**Output:**
+
+```
+        ╔══════════════════════════╗
+        ║                          ║
+        ║       MATH QUEST         ║
+        ║                          ║
+        ║   Press Enter to Start   ║
+        ║                          ║
+        ╚══════════════════════════╝
+```
+
+### Playing Screen
+
+**Input:**
+
+```
+Player presses Enter to start, answers problem "12 + 34 = ?" by typing "46"
+```
+
+**Output:**
+
+```
+        Score: 7          Lives: ♥ ♥ ♥
+
+              12 + 34 = ?
+
+                 [ 46 ]
+
+            ████████░░  (timer bar)
+```
+
+### Game Over Screen
+
+**Input:**
+
+```
+Player loses last life
+```
+
+**Output:**
+
+```
+        ╔══════════════════════════╗
+        ║                          ║
+        ║       GAME OVER          ║
+        ║                          ║
+        ║     Final Score: 12      ║
+        ║                          ║
+        ║  Press Enter to Restart  ║
+        ║                          ║
+        ╚══════════════════════════╝
+```
+
+## Acceptance Criteria
+
+- Game launches with `love .` and displays the title screen
+- Pressing Enter starts a new game with score 0 and 3 lives
+- Problems are displayed with large readable text
+- Player can type a numeric answer and submit with Enter
+- Correct answers increment score, wrong answers decrement lives
+- Game ends at 0 lives and shows final score
+- Background animation runs continuously across all states
+- Problems scale in difficulty as score increases
+- Timer bar counts down and auto-submits on expiry
+- No background music
+- Correct/wrong answer sound effects play on submission
