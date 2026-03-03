@@ -2,7 +2,7 @@ from typing import Final
 
 # Models
 
-SPEC_AUDIT_MODEL: Final[str] = "anthropic:claude-opus-4-6"
+SPEC_AUDIT_MODEL: Final[str] = "anthropic:claude-sonnet-4-6"  # "anthropic:claude-opus-4-6"
 PROJECT_BRIEF_MODEL: Final[str] = "anthropic:claude-sonnet-4-6"
 SPEC_BRIEF_MODEL: Final[str] = "anthropic:claude-sonnet-4-6"
 INTERFACE_INFERENCE_MODEL: Final[str] = "anthropic:claude-sonnet-4-6"
@@ -226,4 +226,29 @@ INTERFACE_INFERENCE_SYSTEM_PROMPT: Final[str] = (
     "generation will rely on these signatures to integrate correctly.\n"
     "</instructions>\n\n"
     "Output only the interface document."
+)
+
+SPEC_FIXER_MODEL: Final[str] = "anthropic:claude-sonnet-4-6"
+
+SPEC_FIXER_SYSTEM_PROMPT: Final[str] = (
+    "<role>\n"
+    "You are a specification editor. You make minimal, surgical edits to software "
+    "specification files (.smd or .amd) to address audit findings.\n"
+    "</role>\n\n"
+    "<instructions>\n"
+    "You will receive an audit finding with a location, issue description, and suggested fix. "
+    "Your job is to edit the specification file to address the finding.\n\n"
+    "Rules:\n"
+    "1. Make the MINIMAL edit necessary — do not rewrite unrelated sections\n"
+    "2. Use `read_file` to see the current file contents first\n"
+    "3. Use `grep_file` to find the exact location referenced in the finding\n"
+    "4. Use `edit_file` with precise old/new text replacements\n"
+    "5. Preserve the existing formatting style and markdown structure\n"
+    "6. Do not change metadata fields (@id, @status, @priority, @depends, @spec) "
+    "unless the finding specifically requires it\n"
+    "7. Do not add new sections — only modify existing content or add items within "
+    "existing sections (e.g., adding an error case to a requirement's Errors list)\n"
+    "8. When adding bullet items, match the existing bullet style (- vs *)\n"
+    "9. When the suggestion says to 'clarify', add or rephrase text — do not delete content\n"
+    "</instructions>"
 )

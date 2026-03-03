@@ -5,7 +5,8 @@ import pytest
 from pydantic_ai import ModelRetry
 from rich.console import Console
 
-from ntt.build.builder import _apply_edits, _resolve_sandboxed, _validate_command
+from ntt.build.builder import _resolve_sandboxed, _validate_command
+from ntt.shared import apply_edits
 
 
 @pytest.fixture()
@@ -123,7 +124,7 @@ class TestApplyEdits:
 
     def test_single_edit(self) -> None:
         edits = json.dumps([{"old": "hello", "new": "world"}])
-        result = _apply_edits(self.SAMPLE, edits)
+        result = apply_edits(self.SAMPLE, edits)
         assert "world" in result
         assert "hello" not in result
 
@@ -135,7 +136,7 @@ class TestApplyEdits:
                 {"old": "ccc", "new": "CCC"},
             ]
         )
-        result = _apply_edits(content, edits)
+        result = apply_edits(content, edits)
         assert result == "AAA\nbbb\nCCC\n"
 
     def test_sequential_edits_see_previous_changes(self) -> None:
@@ -146,7 +147,7 @@ class TestApplyEdits:
                 {"old": "baz bar", "new": "done"},
             ]
         )
-        result = _apply_edits(content, edits)
+        result = apply_edits(content, edits)
         assert result == "done"
 
     def test_multiline_old_and_new(self) -> None:
@@ -159,45 +160,45 @@ class TestApplyEdits:
                 }
             ]
         )
-        result = _apply_edits(content, edits)
+        result = apply_edits(content, edits)
         assert "return x * 2;" in result
 
     def test_rejects_invalid_json(self) -> None:
         with pytest.raises(ModelRetry, match="Could not parse edits JSON"):
-            _apply_edits("content", "not json")
+            apply_edits("content", "not json")
 
     def test_rejects_non_array(self) -> None:
         with pytest.raises(ModelRetry, match="Expected a JSON array"):
-            _apply_edits("content", '{"old": "a", "new": "b"}')
+            apply_edits("content", '{"old": "a", "new": "b"}')
 
     def test_rejects_empty_array(self) -> None:
         with pytest.raises(ModelRetry, match="empty"):
-            _apply_edits("content", "[]")
+            apply_edits("content", "[]")
 
     def test_rejects_non_object_entry(self) -> None:
         with pytest.raises(ModelRetry, match="not an object"):
-            _apply_edits("content", '["not an object"]')
+            apply_edits("content", '["not an object"]')
 
     def test_rejects_missing_old_key(self) -> None:
         with pytest.raises(ModelRetry, match="missing key.*old"):
-            _apply_edits("content", json.dumps([{"new": "b"}]))
+            apply_edits("content", json.dumps([{"new": "b"}]))
 
     def test_rejects_missing_new_key(self) -> None:
         with pytest.raises(ModelRetry, match="missing key.*new"):
-            _apply_edits("content", json.dumps([{"old": "a"}]))
+            apply_edits("content", json.dumps([{"old": "a"}]))
 
     def test_rejects_non_string_values(self) -> None:
         with pytest.raises(ModelRetry, match="must both be strings"):
-            _apply_edits("content", json.dumps([{"old": 123, "new": "b"}]))
+            apply_edits("content", json.dumps([{"old": 123, "new": "b"}]))
 
     def test_rejects_identical_old_new(self) -> None:
         with pytest.raises(ModelRetry, match="identical"):
-            _apply_edits("content", json.dumps([{"old": "x", "new": "x"}]))
+            apply_edits("content", json.dumps([{"old": "x", "new": "x"}]))
 
     def test_rejects_old_not_found(self) -> None:
         with pytest.raises(ModelRetry, match="not found"):
-            _apply_edits("hello world", json.dumps([{"old": "missing", "new": "x"}]))
+            apply_edits("hello world", json.dumps([{"old": "missing", "new": "x"}]))
 
     def test_rejects_ambiguous_match(self) -> None:
         with pytest.raises(ModelRetry, match="matches 2 locations"):
-            _apply_edits("aaa bbb aaa", json.dumps([{"old": "aaa", "new": "x"}]))
+            apply_edits("aaa bbb aaa", json.dumps([{"old": "aaa", "new": "x"}]))

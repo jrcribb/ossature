@@ -18,6 +18,7 @@ from ntt.audit.audit import (
     save_spec_audit_data,
 )
 from ntt.audit.context import generate_project_brief, generate_spec_briefs
+from ntt.audit.fixer import fix_cross_spec_findings, fix_spec_findings
 from ntt.audit.graph import build_spec_graph, write_spec_graph
 from ntt.audit.interfaces import (
     extract_interface_from_amds,
@@ -138,6 +139,41 @@ def present_findings_and_confirm(
         raise SystemExit(1)
 
     status.start()
+
+
+MAX_FIX_CYCLES = 3
+
+
+def _has_fixable_findings(
+    report: SpecAuditReport | CrossSpecAuditReport,
+) -> bool:
+    return any(f.suggestion for f in report.findings)
+
+
+def _build_spec_file_map(
+    smd_files: list[Path],
+    amd_files: list[Path],
+    parsed_smds: list[SMDSpec],
+    parsed_amds: list[AMDSpec],
+    spec_dir: Path,
+) -> dict[str, str]:
+    """Map spec_id -> relative file path within spec_dir."""
+    result: dict[str, str] = {}
+    for smd_file, smd in zip(smd_files, parsed_smds):
+        result[smd.spec_id] = str(smd_file.relative_to(spec_dir))
+    return result
+
+
+def _build_amd_file_map(
+    amd_files: list[Path],
+    parsed_amds: list[AMDSpec],
+    spec_dir: Path,
+) -> dict[str, list[str]]:
+    """Map spec_id -> list of relative AMD file paths within spec_dir."""
+    result: dict[str, list[str]] = {}
+    for amd_file, amd in zip(amd_files, parsed_amds):
+        result.setdefault(amd.spec_id, []).append(str(amd_file.relative_to(spec_dir)))
+    return result
 
 
 def check_and_update_manifest(
@@ -424,22 +460,80 @@ def run_audit(
         # - PER-SPEC AUDIT
         spec_reports: dict[str, SpecAuditReport] = {}
         audited_spec_ids: set[str] = set()
+        spec_file_map = _build_spec_file_map(
+            smd_files, amd_files, parsed_smds, parsed_amds, config.spec_path
+        )
 
         for smd in parsed_smds:
             spec_amds = amd_by_spec.get(smd.spec_id)
 
             if smd.spec_id in specs_to_audit:
-                status.update(f"Auditing {smd.spec_id} - {smd.title}")
-                report = audit_spec(config, smd, spec_amds)
-                save_spec_audit_data(report, smd.spec_id, audit_data_dir)
-                spec_reports[smd.spec_id] = report
-                audited_spec_ids.add(smd.spec_id)
+                spec_file = spec_file_map[smd.spec_id]
 
-                counts = {s: 0 for s in Severity}
-                for finding in report.findings:
-                    counts[finding.severity] += 1
-                summary = ", ".join(f"{v} {k.value}(s)" for k, v in counts.items() if v > 0)
-                console.log(f"  {smd.spec_id}: {summary or 'no findings'}")
+                for fix_cycle in range(MAX_FIX_CYCLES + 1):
+                    if fix_cycle > 0:
+                        status.update(f"Re-auditing {smd.spec_id} (cycle {fix_cycle + 1})")
+                    else:
+                        status.update(f"Auditing {smd.spec_id} - {smd.title}")
+
+                    report = audit_spec(config, smd, spec_amds)
+                    save_spec_audit_data(report, smd.spec_id, audit_data_dir)
+                    spec_reports[smd.spec_id] = report
+                    audited_spec_ids.add(smd.spec_id)
+
+                    counts = {s: 0 for s in Severity}
+                    for finding in report.findings:
+                        counts[finding.severity] += 1
+                    summary = ", ".join(f"{v} {k.value}(s)" for k, v in counts.items() if v > 0)
+                    console.log(f"  {smd.spec_id}: {summary or 'no findings'}")
+
+                    if not report.findings or not _has_fixable_findings(report):
+                        break
+                    if fix_cycle >= MAX_FIX_CYCLES:
+                        break
+
+                    print_audit_summary(
+                        console,
+                        report=report,
+                        title=f"{smd.spec_id} Audit",
+                    )
+                    present_findings_and_confirm(console, status, report)
+
+                    status.stop()
+                    if not questionary.confirm(
+                        f"Auto-fix {len(report.findings)} finding(s) in {smd.spec_id}?",
+                        default=False,
+                    ).ask():
+                        status.start()
+                        break
+                    status.start()
+
+                    status.update(f"Fixing {smd.spec_id} findings")
+                    edited = fix_spec_findings(
+                        findings=report.findings,
+                        spec_file=spec_file,
+                        spec_dir=config.spec_path,
+                        console=console,
+                        status=status,
+                    )
+
+                    if not edited:
+                        console.log(f"  [yellow]No edits made for {smd.spec_id}[/yellow]")
+                        break
+
+                    console.log(
+                        f"  [green]Fixed {len(edited)} file(s) for {smd.spec_id} "
+                        f"— re-auditing[/green]"
+                    )
+                    # Re-parse the edited spec
+                    smd_path = config.spec_path / spec_file
+                    smd = parse_smd_file(smd_path)
+                    # Re-parse AMDs if any were edited
+                    amd_file_map = _build_amd_file_map(amd_files, parsed_amds, config.spec_path)
+                    amd_rel_files = amd_file_map.get(smd.spec_id, [])
+                    if any(f in edited for f in amd_rel_files):
+                        spec_amds = [parse_amd_file(config.spec_path / af) for af in amd_rel_files]
+                        amd_by_spec[smd.spec_id] = spec_amds
             else:
                 cached = load_spec_audit_data(smd.spec_id, audit_data_dir)
                 if cached:
@@ -463,24 +557,66 @@ def run_audit(
                 title=f"{config.name} v{config.version} - Spec Audit",
             )
 
-            present_findings_and_confirm(console, status, fresh_findings)
-
         # - CROSS-SPEC AUDIT
         cross_spec_report: CrossSpecAuditReport | None = None
 
         if len(parsed_smds) > 1:
             if audited_spec_ids:
-                status.update(f"Cross-spec audit - {config.name} v{config.version}")
-                cross_spec_report = audit_cross_specs(config, parsed_smds, parsed_amds)
-                save_cross_spec_audit_data(cross_spec_report, audit_data_dir)
+                for fix_cycle in range(MAX_FIX_CYCLES + 1):
+                    if fix_cycle > 0:
+                        status.update(f"Re-running cross-spec audit (cycle {fix_cycle + 1})")
+                    else:
+                        status.update(f"Cross-spec audit - {config.name} v{config.version}")
 
-                print_audit_summary(
-                    console,
-                    report=cross_spec_report,
-                    title=f"{config.name} v{config.version} - Cross-Spec Audit",
-                )
+                    cross_spec_report = audit_cross_specs(config, parsed_smds, parsed_amds)
+                    save_cross_spec_audit_data(cross_spec_report, audit_data_dir)
 
-                present_findings_and_confirm(console, status, cross_spec_report)
+                    print_audit_summary(
+                        console,
+                        report=cross_spec_report,
+                        title=f"{config.name} v{config.version} - Cross-Spec Audit",
+                    )
+
+                    if not cross_spec_report.findings or not _has_fixable_findings(
+                        cross_spec_report
+                    ):
+                        break
+                    if fix_cycle >= MAX_FIX_CYCLES:
+                        break
+
+                    present_findings_and_confirm(console, status, cross_spec_report)
+
+                    status.stop()
+                    if not questionary.confirm(
+                        f"Auto-fix {len(cross_spec_report.findings)} cross-spec finding(s)?",
+                        default=False,
+                    ).ask():
+                        status.start()
+                        break
+                    status.start()
+
+                    status.update("Fixing cross-spec findings")
+                    edited = fix_cross_spec_findings(
+                        findings=cross_spec_report.findings,
+                        spec_files=spec_file_map,
+                        spec_dir=config.spec_path,
+                        console=console,
+                        status=status,
+                    )
+
+                    if not edited:
+                        console.log("[yellow]No edits made for cross-spec findings[/yellow]")
+                        break
+
+                    console.log(
+                        f"  [green]Fixed {len(edited)} file(s) for cross-spec findings "
+                        f"— re-auditing[/green]"
+                    )
+                    # Re-parse any edited spec files
+                    for smd_idx, smd_obj in enumerate(parsed_smds):
+                        rel = spec_file_map.get(smd_obj.spec_id, "")
+                        if rel in edited:
+                            parsed_smds[smd_idx] = parse_smd_file(config.spec_path / rel)
             else:
                 cross_spec_report = load_cross_spec_audit_data(audit_data_dir)
 
@@ -494,6 +630,14 @@ def run_audit(
                 filename=audit_report_filepath,
             )
             console.log(f"Audit report saved to [bold]{audit_report_filepath}")
+
+        # Update manifest if spec files were edited during fix cycles
+        if audited_spec_ids:
+            manifest_path = config.metadata_path / "manifest.toml"
+            updated_manifest = create_manifest(
+                config=config, smd_files=smd_files, amd_files=amd_files
+            )
+            write_manifest(updated_manifest, filename=manifest_path)
 
         # - BRIEFS GENERATION
         specs_needing_briefs = audited_spec_ids | specs_missing_briefs
