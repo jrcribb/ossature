@@ -33,7 +33,10 @@ def generate_spec_plan(
 
     sections: list[str] = []
 
-    sections.append(f"# Project: {config.name} ({config.output.language})\n")
+    project_header = f"# Project: {config.name} v{config.version} ({config.output.language})"
+    if config.output.framework:
+        project_header += f" — Framework: {config.output.framework}"
+    sections.append(project_header + "\n")
     sections.append("## Specification (SMD)\n")
     sections.append(render_smd(smd))
 

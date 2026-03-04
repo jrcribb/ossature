@@ -69,12 +69,17 @@ def generate_project_brief(config: NTTConfig, parsed_smds: list[SMDSpec]) -> Bri
 
     overviews = format_smd_specs_overviews(parsed_smds)
 
+    project_info = f"Project: {config.name} v{config.version} — Language: {config.output.language}"
+    if config.output.framework:
+        project_info += f" — Framework: {config.output.framework}"
+    user_prompt = f"{project_info}\n\n{overviews}"
+
     agent = Agent(
         config.llm.model_for("brief"),
         instructions=system_prompt,
     )
 
-    result = agent.run_sync(overviews)
+    result = agent.run_sync(user_prompt)
 
     return Brief(brief=result.output)
 

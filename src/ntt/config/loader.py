@@ -1,4 +1,5 @@
 import os
+import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -216,4 +217,26 @@ def load_config(path: Path | None = None) -> NTTConfig:
     if config.llm.uses_ollama and "OLLAMA_BASE_URL" not in os.environ:
         os.environ["OLLAMA_BASE_URL"] = config.llm.ollama_base_url
 
+    _warn_redundant_cd(config)
+
     return config
+
+
+def _warn_redundant_cd(config: NTTConfig) -> None:
+    output_dir = config.output.dir
+    prefix = f"cd {output_dir}"
+    fields = {"setup": config.build.setup, "verify": config.build.verify, "test": config.build.test}
+    for field_name, command in fields.items():
+        if not command:
+            continue
+        stripped = command.lstrip()
+        if not stripped.startswith(prefix):
+            continue
+        rest = stripped[len(prefix) :]
+        if rest == "" or rest[0] in (" ", "\t", ";", "&"):
+            warnings.warn(
+                f"[build] {field_name} contains 'cd {output_dir}' — "
+                f"this is unnecessary. All build commands already run "
+                f"inside the output directory ({output_dir!r}).",
+                stacklevel=2,
+            )

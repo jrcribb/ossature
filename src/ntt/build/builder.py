@@ -454,6 +454,15 @@ def assemble_task_prompt(
 ) -> str:
     sections: list[str] = []
 
+    # Project config
+    config_lines = [
+        f"Project: {config.name} v{config.version}",
+        f"Language: {config.output.language}",
+    ]
+    if config.output.framework:
+        config_lines.append(f"Framework: {config.output.framework}")
+    sections.append("<project_config>\n" + "\n".join(config_lines) + "\n</project_config>")
+
     # Project brief
     brief_path = config.metadata_context_path / "project-brief.md"
     if brief_path.exists():
