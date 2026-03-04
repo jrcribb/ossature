@@ -1,6 +1,5 @@
 from pydantic_ai import Agent
 
-from ntt.audit.prompts import PROJECT_BRIEF_MODEL, SPEC_BRIEF_MODEL
 from ntt.config.loader import NTTConfig
 from ntt.models.audit import Brief
 from ntt.models.smd import SMDSpec
@@ -71,7 +70,7 @@ def generate_project_brief(config: NTTConfig, parsed_smds: list[SMDSpec]) -> Bri
     overviews = format_smd_specs_overviews(parsed_smds)
 
     agent = Agent(
-        PROJECT_BRIEF_MODEL,
+        config.llm.model_for("brief"),
         instructions=system_prompt,
     )
 
@@ -98,7 +97,7 @@ def generate_spec_briefs(config: NTTConfig, parsed_smds: list[SMDSpec]) -> dict[
     )
 
     agent = Agent(
-        SPEC_BRIEF_MODEL,
+        config.llm.model_for("brief"),
         instructions=system_prompt,
     )
 

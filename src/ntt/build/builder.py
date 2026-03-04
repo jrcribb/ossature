@@ -21,10 +21,8 @@ from rich.text import Text
 
 from ntt.audit.planner import write_plan
 from ntt.build.prompts import (
-    BUILD_MODEL,
     FIXER_SYSTEM_PROMPT,
     IMPLEMENTER_SYSTEM_PROMPT,
-    INTERFACE_EXTRACTION_MODEL,
     INTERFACE_EXTRACTION_SYSTEM_PROMPT,
 )
 from ntt.build.state import (
@@ -308,10 +306,10 @@ def _register_tools(agent: Agent[BuildContext, str]) -> None:
             return f"Error reading context file '{context_path}': {e}"
 
 
-def _create_impl_agent(language: str) -> Agent[BuildContext, str]:
+def _create_impl_agent(config: NTTConfig) -> Agent[BuildContext, str]:
     agent: Agent[BuildContext, str] = Agent(
-        BUILD_MODEL,
-        system_prompt=IMPLEMENTER_SYSTEM_PROMPT.format(language=language),
+        config.llm.model_for("build"),
+        system_prompt=IMPLEMENTER_SYSTEM_PROMPT.format(language=config.output.language),
         deps_type=BuildContext,
         retries=3,
         model_settings={"max_tokens": 16384},
@@ -320,10 +318,10 @@ def _create_impl_agent(language: str) -> Agent[BuildContext, str]:
     return agent
 
 
-def _create_fix_agent(language: str) -> Agent[BuildContext, str]:
+def _create_fix_agent(config: NTTConfig) -> Agent[BuildContext, str]:
     agent: Agent[BuildContext, str] = Agent(
-        BUILD_MODEL,
-        system_prompt=FIXER_SYSTEM_PROMPT.format(language=language),
+        config.llm.model_for("build"),
+        system_prompt=FIXER_SYSTEM_PROMPT.format(language=config.output.language),
         deps_type=BuildContext,
         retries=3,
         model_settings={"max_tokens": 16384},
@@ -698,7 +696,7 @@ def extract_spec_interface(
     console.log(f"  [cyan]Extracting interface for {spec_id}...[/cyan]")
 
     agent = Agent(
-        INTERFACE_EXTRACTION_MODEL,
+        config.llm.model_for("interface"),
         instructions=INTERFACE_EXTRACTION_SYSTEM_PROMPT.format(language=language),
     )
     result = agent.run_sync("\n".join(sections))
@@ -761,8 +759,7 @@ def build_task(
     status: Status,
     verbose: bool = False,
 ) -> TaskResult:
-    language = config.output.language
-    impl_agent = _create_impl_agent(language)
+    impl_agent = _create_impl_agent(config)
 
     slug = make_task_slug(task)
     task_dir = config.metadata_path / "tasks" / f"{task.id}-{slug}"
@@ -815,7 +812,7 @@ def build_task(
         fix_prompt = assemble_fix_prompt(task, verify_output, config)
         (task_dir / f"fix-{attempt + 1}-prompt.md").write_text(fix_prompt)
 
-        fix_agent = _create_fix_agent(language)
+        fix_agent = _create_fix_agent(config)
         fix_result = _run_with_retry(fix_agent, fix_prompt, build_ctx, console)
         (task_dir / f"fix-{attempt + 1}-response.md").write_text(fix_result.output)
 

@@ -8,7 +8,7 @@ import tomli_w
 from pydantic_ai import Agent
 
 from ntt.audit.graph import SpecGraph
-from ntt.audit.prompts import PLAN_GENERATION_SYSTEM_PROMPT, PLANNER_MODEL
+from ntt.audit.prompts import PLAN_GENERATION_SYSTEM_PROMPT
 from ntt.config.loader import NTTConfig
 from ntt.models.amd import AMDSpec
 from ntt.models.audit import SpecAuditReport
@@ -26,7 +26,7 @@ def generate_spec_plan(
     context_inventory: list[str] | None = None,
 ) -> SpecTaskPlan:
     agent = Agent(
-        PLANNER_MODEL,
+        config.llm.model_for("planner"),
         output_type=SpecTaskPlan,
         system_prompt=PLAN_GENERATION_SYSTEM_PROMPT.format(language=config.output.language),
     )

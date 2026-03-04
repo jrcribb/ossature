@@ -362,8 +362,9 @@ def run_audit(
     try:
         config = load_config(config_path)
     except ConfigError as e:
-        console.print(f"[red]Error:[/] {e}")
-        console.print("Run [cyan]ntt init[/] first to create a project.")
+        from rich.markup import escape
+
+        console.print(f"[red]Error:[/] {escape(str(e))}")
         raise SystemExit(1)
 
     with Status("Spec validation", console=console) as status:
@@ -513,6 +514,7 @@ def run_audit(
                         findings=report.findings,
                         spec_file=spec_file,
                         spec_dir=config.spec_path,
+                        config=config,
                         console=console,
                         status=status,
                     )
@@ -600,6 +602,7 @@ def run_audit(
                         findings=cross_spec_report.findings,
                         spec_files=spec_file_map,
                         spec_dir=config.spec_path,
+                        config=config,
                         console=console,
                         status=status,
                     )

@@ -3,7 +3,15 @@ from pathlib import Path
 
 import pytest
 
-from ntt.config.loader import ConfigError, NTTConfig, load_config
+from ntt.config.loader import (
+    DEFAULT_MODEL,
+    DEFAULT_OLLAMA_BASE_URL,
+    TOOL_REQUIRED_ROLES,
+    ConfigError,
+    LLMConfig,
+    NTTConfig,
+    load_config,
+)
 
 
 class TestConfigLoader:
@@ -62,6 +70,9 @@ setup = "cargo init"
 verify = "cargo check"
 test = "cargo test"
 max_fix_attempts = 5
+
+[llm]
+model = "anthropic:claude-sonnet-4-6"
 """
         (temp_dir / "ntt.toml").write_text(config_content)
         config = load_config(temp_dir / "ntt.toml")
@@ -69,3 +80,159 @@ max_fix_attempts = 5
         assert config.build.verify == "cargo check"
         assert config.build.test == "cargo test"
         assert config.build.max_fix_attempts == 5
+
+    def test_llm_config_defaults(self, sample_config: NTTConfig):
+        assert sample_config.llm.model == DEFAULT_MODEL
+        assert sample_config.llm.audit is None
+        assert sample_config.llm.build is None
+        assert sample_config.llm.planner is None
+        assert sample_config.llm.brief is None
+        assert sample_config.llm.interface is None
+        assert sample_config.llm.fixer is None
+        assert sample_config.llm.ollama_base_url == DEFAULT_OLLAMA_BASE_URL
+
+    def test_llm_model_for_falls_back_to_default(self):
+        llm = LLMConfig(model="test:default-model")
+        assert llm.model_for("audit") == "test:default-model"
+        assert llm.model_for("build") == "test:default-model"
+        assert llm.model_for("planner") == "test:default-model"
+        assert llm.model_for("brief") == "test:default-model"
+        assert llm.model_for("interface") == "test:default-model"
+        assert llm.model_for("fixer") == "test:default-model"
+
+    def test_llm_model_for_uses_override(self):
+        llm = LLMConfig(
+            model="test:default",
+            audit="test:audit-model",
+            build="ollama:codellama",
+        )
+        assert llm.model_for("audit") == "test:audit-model"
+        assert llm.model_for("build") == "ollama:codellama"
+        assert llm.model_for("planner") == "test:default"
+        assert llm.model_for("fixer") == "test:default"
+
+    def test_llm_model_for_unknown_role_returns_default(self):
+        llm = LLMConfig(model="test:default")
+        assert llm.model_for("nonexistent") == "test:default"
+
+    def test_load_config_with_llm_section(self, temp_dir: Path):
+        config_content = """
+[project]
+name = "test-project"
+version = "0.0.1"
+
+[output]
+language = "rust"
+
+[llm]
+model = "ollama:deepseek-coder"
+audit = "anthropic:claude-opus-4-6"
+build = "anthropic:claude-sonnet-4-6"
+"""
+        (temp_dir / "ntt.toml").write_text(config_content)
+        config = load_config(temp_dir / "ntt.toml")
+        assert config.llm.model == "ollama:deepseek-coder"
+        assert config.llm.audit == "anthropic:claude-opus-4-6"
+        assert config.llm.build == "anthropic:claude-sonnet-4-6"
+        assert config.llm.planner is None
+        assert config.llm.model_for("planner") == "ollama:deepseek-coder"
+        assert config.llm.model_for("audit") == "anthropic:claude-opus-4-6"
+
+    def test_llm_uses_ollama_default_model(self):
+        llm = LLMConfig(model="ollama:deepseek-coder")
+        assert llm.uses_ollama is True
+
+    def test_llm_uses_ollama_role_override(self):
+        llm = LLMConfig(model="anthropic:claude-sonnet-4-6", build="ollama:codellama")
+        assert llm.uses_ollama is True
+
+    def test_llm_uses_ollama_false(self):
+        llm = LLMConfig(model="anthropic:claude-sonnet-4-6")
+        assert llm.uses_ollama is False
+
+    def test_load_config_ollama_sets_env_var(self, temp_dir: Path, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.delenv("OLLAMA_BASE_URL", raising=False)
+        config_content = """
+[project]
+name = "test-project"
+
+[llm]
+model = "ollama:deepseek-coder"
+ollama_base_url = "http://myhost:11434"
+"""
+        (temp_dir / "ntt.toml").write_text(config_content)
+        config = load_config(temp_dir / "ntt.toml")
+        assert config.llm.ollama_base_url == "http://myhost:11434"
+        assert os.environ["OLLAMA_BASE_URL"] == "http://myhost:11434"
+
+    def test_load_config_ollama_respects_existing_env_var(
+        self, temp_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.setenv("OLLAMA_BASE_URL", "http://already-set:11434")
+        config_content = """
+[project]
+name = "test-project"
+
+[llm]
+model = "ollama:deepseek-coder"
+ollama_base_url = "http://from-config:11434"
+"""
+        (temp_dir / "ntt.toml").write_text(config_content)
+        load_config(temp_dir / "ntt.toml")
+        assert os.environ["OLLAMA_BASE_URL"] == "http://already-set:11434"
+
+    def test_load_config_no_ollama_skips_env_var(
+        self, temp_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.delenv("OLLAMA_BASE_URL", raising=False)
+        config_content = """
+[project]
+name = "test-project"
+
+[llm]
+model = "anthropic:claude-sonnet-4-6"
+"""
+        (temp_dir / "ntt.toml").write_text(config_content)
+        load_config(temp_dir / "ntt.toml")
+        assert "OLLAMA_BASE_URL" not in os.environ
+
+    def test_load_config_without_llm_section_raises(self, temp_dir: Path):
+        config_content = """
+[project]
+name = "test-project"
+version = "0.0.1"
+
+[output]
+language = "python"
+"""
+        (temp_dir / "ntt.toml").write_text(config_content)
+        with pytest.raises(ConfigError, match="Missing \\[llm\\] section"):
+            load_config(temp_dir / "ntt.toml")
+
+    def test_load_config_llm_without_model_raises(self, temp_dir: Path):
+        config_content = """
+[project]
+name = "test-project"
+version = "0.0.1"
+
+[output]
+language = "python"
+
+[llm]
+audit = "anthropic:claude-opus-4-6"
+"""
+        (temp_dir / "ntt.toml").write_text(config_content)
+        with pytest.raises(ConfigError, match="Missing 'model' in \\[llm\\]"):
+            load_config(temp_dir / "ntt.toml")
+
+    def test_tool_required_roles(self):
+        assert "build" in TOOL_REQUIRED_ROLES
+        assert "fixer" in TOOL_REQUIRED_ROLES
+        assert "audit" not in TOOL_REQUIRED_ROLES
+        assert "brief" not in TOOL_REQUIRED_ROLES
+
+    def test_initialized_project_has_llm_section(self, initialized_project: Path):
+        config_path = initialized_project / "ntt.toml"
+        content = config_path.read_text()
+        assert "[llm]" in content
+        assert "model =" in content

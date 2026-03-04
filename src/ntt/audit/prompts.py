@@ -1,13 +1,5 @@
 from typing import Final
 
-# Models
-
-SPEC_AUDIT_MODEL: Final[str] = "anthropic:claude-sonnet-4-6"  # "anthropic:claude-opus-4-6"
-PROJECT_BRIEF_MODEL: Final[str] = "anthropic:claude-sonnet-4-6"
-SPEC_BRIEF_MODEL: Final[str] = "anthropic:claude-sonnet-4-6"
-INTERFACE_INFERENCE_MODEL: Final[str] = "anthropic:claude-sonnet-4-6"
-PLANNER_MODEL: Final[str] = "anthropic:claude-sonnet-4-6"
-
 # Prompts
 
 SPEC_AUDIT_SYSTEM_PROMPT: Final[str] = (
@@ -227,8 +219,6 @@ INTERFACE_INFERENCE_SYSTEM_PROMPT: Final[str] = (
     "</instructions>\n\n"
     "Output only the interface document."
 )
-
-SPEC_FIXER_MODEL: Final[str] = "anthropic:claude-sonnet-4-6"
 
 SPEC_FIXER_SYSTEM_PROMPT: Final[str] = (
     "<role>\n"

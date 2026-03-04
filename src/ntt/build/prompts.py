@@ -1,8 +1,5 @@
 from typing import Final
 
-BUILD_MODEL: Final[str] = "anthropic:claude-sonnet-4-6"
-INTERFACE_EXTRACTION_MODEL: Final[str] = "anthropic:claude-sonnet-4-6"
-
 IMPLEMENTER_SYSTEM_PROMPT: Final[str] = (
     "<role>\n"
     "You are implementing one component of a {language} project.\n"

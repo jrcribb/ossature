@@ -1,6 +1,6 @@
 from pydantic_ai import Agent
 
-from ntt.audit.prompts import INTERFACE_INFERENCE_MODEL, INTERFACE_INFERENCE_SYSTEM_PROMPT
+from ntt.audit.prompts import INTERFACE_INFERENCE_SYSTEM_PROMPT
 from ntt.config.loader import NTTConfig
 from ntt.models.amd import AMDSpec
 from ntt.models.smd import SMDSpec
@@ -64,7 +64,7 @@ def infer_interface_from_smd(
     dependency_interfaces: dict[str, str] | None = None,
 ) -> str:
     agent = Agent(
-        INTERFACE_INFERENCE_MODEL,
+        config.llm.model_for("interface"),
         instructions=INTERFACE_INFERENCE_SYSTEM_PROMPT.format(
             language=config.output.language,
         ),

@@ -7,3 +7,6 @@ context_dir = "context"
 [output]
 dir = "output"
 language = "lua"
+
+[llm]
+model = "mistral:mistral-large-latest"

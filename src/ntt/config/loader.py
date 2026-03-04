@@ -1,3 +1,4 @@
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -31,6 +32,43 @@ class BuildConfig:
     test: str | None = None
 
 
+DEFAULT_MODEL = "anthropic:claude-sonnet-4-6"
+DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434/v1"
+
+TOOL_REQUIRED_ROLES = frozenset({"build", "fixer"})
+
+
+@dataclass
+class LLMConfig:
+    model: str = DEFAULT_MODEL
+    audit: str | None = None
+    build: str | None = None
+    planner: str | None = None
+    brief: str | None = None
+    interface: str | None = None
+    fixer: str | None = None
+    ollama_base_url: str = DEFAULT_OLLAMA_BASE_URL
+
+    @property
+    def uses_ollama(self) -> bool:
+        models = [
+            self.model,
+            self.audit,
+            self.build,
+            self.planner,
+            self.brief,
+            self.interface,
+            self.fixer,
+        ]
+        return any(m is not None and m.startswith("ollama:") for m in models)
+
+    def model_for(self, role: str) -> str:
+        override: str | None = getattr(self, role, None)
+        if override is not None:
+            return override
+        return self.model
+
+
 @dataclass
 class NTTConfig:
     name: str = "ntt-project"
@@ -41,6 +79,7 @@ class NTTConfig:
     output: OutputConfig = field(default_factory=OutputConfig)
     test: TestConfig = field(default_factory=TestConfig)
     build: BuildConfig = field(default_factory=BuildConfig)
+    llm: LLMConfig = field(default_factory=LLMConfig)
 
     root: Path = field(default_factory=Path.cwd)
 
@@ -118,6 +157,19 @@ def _parse_build_config(data: dict[str, Any]) -> BuildConfig:
     )
 
 
+def _parse_llm_config(data: dict[str, Any]) -> LLMConfig:
+    return LLMConfig(
+        model=data.get("model", DEFAULT_MODEL),
+        audit=data.get("audit"),
+        build=data.get("build"),
+        planner=data.get("planner"),
+        brief=data.get("brief"),
+        interface=data.get("interface"),
+        fixer=data.get("fixer"),
+        ollama_base_url=data.get("ollama_base_url", DEFAULT_OLLAMA_BASE_URL),
+    )
+
+
 def load_config(path: Path | None = None) -> NTTConfig:
     if path is None:
         path = find_config()
@@ -135,6 +187,20 @@ def load_config(path: Path | None = None) -> NTTConfig:
 
     project = data.get("project", {})
 
+    llm_data = data.get("llm")
+    if llm_data is None:
+        raise ConfigError(
+            "Missing [llm] section in ntt.toml. Add at minimum:\n\n"
+            "  [llm]\n"
+            '  model = "anthropic:claude-sonnet-4-6"'
+        )
+    if "model" not in llm_data:
+        raise ConfigError(
+            "Missing 'model' in [llm] section. Set the default model, e.g.:\n\n"
+            "  [llm]\n"
+            '  model = "anthropic:claude-sonnet-4-6"'
+        )
+
     config = NTTConfig(
         name=project.get("name", "ntt-project"),
         version=project.get("version", "0.0.1"),
@@ -143,7 +209,11 @@ def load_config(path: Path | None = None) -> NTTConfig:
         output=_parse_output_config(data.get("output", {})),
         test=_parse_test_config(data.get("test", {})),
         build=_parse_build_config(data.get("build", {})),
+        llm=_parse_llm_config(llm_data),
         root=path.parent,
     )
+
+    if config.llm.uses_ollama and "OLLAMA_BASE_URL" not in os.environ:
+        os.environ["OLLAMA_BASE_URL"] = config.llm.ollama_base_url
 
     return config

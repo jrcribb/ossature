@@ -162,8 +162,9 @@ def run_new(
     try:
         config = load_config(config_path)
     except ConfigError as e:
-        console.print(f"[red]Error:[/] {e}")
-        console.print("Run [cyan]ntt init[/] first to create a project.")
+        from rich.markup import escape
+
+        console.print(f"[red]Error:[/] {escape(str(e))}")
         raise SystemExit(1)
 
     console.print(f"\n[bold]Creating new spec:[/] {name}\n")

@@ -7,7 +7,8 @@ from pydantic_ai import Agent, ModelRetry, RunContext
 from rich.console import Console
 from rich.status import Status
 
-from ntt.audit.prompts import SPEC_FIXER_MODEL, SPEC_FIXER_SYSTEM_PROMPT
+from ntt.audit.prompts import SPEC_FIXER_SYSTEM_PROMPT
+from ntt.config.loader import NTTConfig
 from ntt.models.audit import AuditFinding, CrossSpecFinding
 from ntt.shared import apply_edits
 
@@ -98,9 +99,9 @@ def _register_fixer_tools(agent: Agent[FixContext, str]) -> None:
         return f"Edited: {path} ({n_edits} edit(s) applied)"
 
 
-def _create_fixer_agent() -> Agent[FixContext, str]:
+def _create_fixer_agent(config: NTTConfig) -> Agent[FixContext, str]:
     agent: Agent[FixContext, str] = Agent(
-        SPEC_FIXER_MODEL,
+        config.llm.model_for("fixer"),
         system_prompt=SPEC_FIXER_SYSTEM_PROMPT,
         deps_type=FixContext,
         retries=3,
@@ -152,11 +153,12 @@ def fix_spec_findings(
     findings: list[AuditFinding],
     spec_file: str,
     spec_dir: Path,
+    config: NTTConfig,
     console: Console,
     status: Status,
 ) -> list[str]:
     """Fix audit findings for a single spec. Returns list of edited file paths."""
-    agent = _create_fixer_agent()
+    agent = _create_fixer_agent(config)
     all_edited: list[str] = []
 
     for finding in findings:
@@ -196,11 +198,12 @@ def fix_cross_spec_findings(
     findings: list[CrossSpecFinding],
     spec_files: dict[str, str],
     spec_dir: Path,
+    config: NTTConfig,
     console: Console,
     status: Status,
 ) -> list[str]:
     """Fix cross-spec audit findings. Returns list of edited file paths."""
-    agent = _create_fixer_agent()
+    agent = _create_fixer_agent(config)
     all_edited: list[str] = []
 
     for finding in findings:

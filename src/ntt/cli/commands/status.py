@@ -15,7 +15,9 @@ def run_status(
     try:
         config = load_config(config_path)
     except ConfigError as e:
-        console.print(f"[red]Error:[/] {e}")
+        from rich.markup import escape
+
+        console.print(f"[red]Error:[/] {escape(str(e))}")
         raise SystemExit(1)
 
     plan_filepath = config.metadata_path / "plan.toml"

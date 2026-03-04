@@ -5,7 +5,6 @@ from pydantic_ai import Agent
 
 from ntt.audit.prompts import (
     CROSS_SPEC_AUDIT_SYSTEM_PROMPT,
-    SPEC_AUDIT_MODEL,
     SPEC_AUDIT_SYSTEM_PROMPT,
 )
 from ntt.config.loader import NTTConfig
@@ -22,7 +21,7 @@ def audit_spec(
     amds: list[AMDSpec] | None = None,
 ) -> SpecAuditReport:
     agent = Agent(
-        SPEC_AUDIT_MODEL,
+        config.llm.model_for("audit"),
         output_type=SpecAuditReport,
         system_prompt=SPEC_AUDIT_SYSTEM_PROMPT.format(language=config.output.language),
     )
@@ -52,7 +51,7 @@ def audit_cross_specs(
     Only meaningful when there are multiple specs with dependencies.
     """
     agent = Agent(
-        SPEC_AUDIT_MODEL,
+        config.llm.model_for("audit"),
         output_type=CrossSpecAuditReport,
         system_prompt=CROSS_SPEC_AUDIT_SYSTEM_PROMPT.format(language=config.output.language),
     )

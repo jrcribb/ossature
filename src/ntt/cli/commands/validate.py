@@ -97,8 +97,9 @@ def run_validate(
     try:
         config = load_config(config_path)
     except ConfigError as e:
-        console.print(f"[red]Error:[/] {e}")
-        console.print("Run [cyan]ntt init[/] first to create a project.")
+        from rich.markup import escape
+
+        console.print(f"[red]Error:[/] {escape(str(e))}")
         raise SystemExit(1)
 
     _conf_file = config.root / "ntt.toml"
