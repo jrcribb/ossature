@@ -2,10 +2,10 @@ from pathlib import Path
 
 import pytest
 
-from ntt.models.shared import Status
-from ntt.models.smd import Example, Priority, Requirement, SMDSpec
-from ntt.parsers.smd import SMDParseError, parse_smd, parse_smd_file
-from ntt.renderer.smd import render_smd
+from ossature.models.shared import Status
+from ossature.models.smd import Example, Priority, Requirement, SMDSpec
+from ossature.parsers.smd import SMDParseError, parse_smd, parse_smd_file
+from ossature.renderer.smd import render_smd
 
 VALID_SMD = """\
 # Test Feature

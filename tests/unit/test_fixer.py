@@ -5,20 +5,20 @@ from pydantic_ai import ModelRetry
 from rich.console import Console
 from rich.status import Status
 
-from ntt.audit.fixer import (
+from ossature.audit.fixer import (
     FixContext,
     _build_cross_spec_finding_prompt,
     _build_finding_prompt,
     _resolve_spec_sandboxed,
     _verify_spec_parses,
 )
-from ntt.cli.commands.audit import (
+from ossature.cli.commands.audit import (
     MAX_FIX_CYCLES,
     _build_amd_file_map,
     _build_spec_file_map,
     _has_fixable_findings,
 )
-from ntt.models.audit import (
+from ossature.models.audit import (
     AuditFinding,
     CrossSpecAuditReport,
     CrossSpecFinding,
@@ -334,8 +334,8 @@ class TestBuildSpecFileMap:
 
 class TestBuildAmdFileMap:
     def test_maps_spec_ids_to_amd_files(self, tmp_path: Path) -> None:
-        from ntt.models.amd import AMDSpec
-        from ntt.models.shared import Status
+        from ossature.models.amd import AMDSpec
+        from ossature.models.shared import Status
 
         spec_dir = tmp_path / "specs"
         spec_dir.mkdir()

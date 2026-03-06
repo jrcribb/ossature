@@ -27,5 +27,5 @@ coverage.xml
 .pytest_cache/
 
 
-# ntt specific
-.ntt
+# ossature specific
+.ossature

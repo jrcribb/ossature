@@ -5,8 +5,8 @@ import pytest
 from pydantic_ai import ModelRetry
 from rich.console import Console
 
-from ntt.build.builder import _resolve_sandboxed, _validate_command
-from ntt.shared import apply_edits
+from ossature.build.builder import _resolve_sandboxed, _validate_command
+from ossature.shared import apply_edits
 
 
 @pytest.fixture()

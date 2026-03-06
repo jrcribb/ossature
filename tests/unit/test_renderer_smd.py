@@ -2,9 +2,9 @@ from pathlib import Path
 
 import pytest
 
-from ntt.models.shared import Status
-from ntt.models.smd import Example, Priority, Requirement, SMDSpec
-from ntt.renderer.smd import (
+from ossature.models.shared import Status
+from ossature.models.smd import Example, Priority, Requirement, SMDSpec
+from ossature.renderer.smd import (
     render_example,
     render_requirement,
     render_smd,

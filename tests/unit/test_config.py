@@ -3,13 +3,13 @@ from pathlib import Path
 
 import pytest
 
-from ntt.config.loader import (
+from ossature.config.loader import (
     DEFAULT_MODEL,
     DEFAULT_OLLAMA_BASE_URL,
     TOOL_REQUIRED_ROLES,
     ConfigError,
     LLMConfig,
-    NTTConfig,
+    OssatureConfig,
     load_config,
 )
 
@@ -29,7 +29,7 @@ class TestConfigLoader:
             os.chdir(original_cwd)
 
     def test_load_config_explicit_path(self, initialized_project: Path):
-        config_path = initialized_project / "ntt.toml"
+        config_path = initialized_project / "ossature.toml"
         config = load_config(config_path)
 
         assert config.name == "test-project"
@@ -44,12 +44,12 @@ class TestConfigLoader:
         finally:
             os.chdir(original_cwd)
 
-    def test_config_paths(self, sample_config: NTTConfig):
+    def test_config_paths(self, sample_config: OssatureConfig):
         assert sample_config.spec_path == sample_config.root / "specs"
         assert sample_config.context_path == sample_config.root / "context"
         assert sample_config.output_path == sample_config.root / "output"
 
-    def test_build_config_defaults(self, sample_config: NTTConfig):
+    def test_build_config_defaults(self, sample_config: OssatureConfig):
         assert sample_config.build.max_fix_attempts == 3
         assert sample_config.build.setup is None
         assert sample_config.build.verify is None
@@ -74,14 +74,14 @@ max_fix_attempts = 5
 [llm]
 model = "anthropic:claude-sonnet-4-6"
 """
-        (temp_dir / "ntt.toml").write_text(config_content)
-        config = load_config(temp_dir / "ntt.toml")
+        (temp_dir / "ossature.toml").write_text(config_content)
+        config = load_config(temp_dir / "ossature.toml")
         assert config.build.setup == "cargo init"
         assert config.build.verify == "cargo check"
         assert config.build.test == "cargo test"
         assert config.build.max_fix_attempts == 5
 
-    def test_llm_config_defaults(self, sample_config: NTTConfig):
+    def test_llm_config_defaults(self, sample_config: OssatureConfig):
         assert sample_config.llm.model == DEFAULT_MODEL
         assert sample_config.llm.audit is None
         assert sample_config.llm.build is None
@@ -129,8 +129,8 @@ model = "ollama:deepseek-coder"
 audit = "anthropic:claude-opus-4-6"
 build = "anthropic:claude-sonnet-4-6"
 """
-        (temp_dir / "ntt.toml").write_text(config_content)
-        config = load_config(temp_dir / "ntt.toml")
+        (temp_dir / "ossature.toml").write_text(config_content)
+        config = load_config(temp_dir / "ossature.toml")
         assert config.llm.model == "ollama:deepseek-coder"
         assert config.llm.audit == "anthropic:claude-opus-4-6"
         assert config.llm.build == "anthropic:claude-sonnet-4-6"
@@ -160,8 +160,8 @@ name = "test-project"
 model = "ollama:deepseek-coder"
 ollama_base_url = "http://myhost:11434"
 """
-        (temp_dir / "ntt.toml").write_text(config_content)
-        config = load_config(temp_dir / "ntt.toml")
+        (temp_dir / "ossature.toml").write_text(config_content)
+        config = load_config(temp_dir / "ossature.toml")
         assert config.llm.ollama_base_url == "http://myhost:11434"
         assert os.environ["OLLAMA_BASE_URL"] == "http://myhost:11434"
 
@@ -177,8 +177,8 @@ name = "test-project"
 model = "ollama:deepseek-coder"
 ollama_base_url = "http://from-config:11434"
 """
-        (temp_dir / "ntt.toml").write_text(config_content)
-        load_config(temp_dir / "ntt.toml")
+        (temp_dir / "ossature.toml").write_text(config_content)
+        load_config(temp_dir / "ossature.toml")
         assert os.environ["OLLAMA_BASE_URL"] == "http://already-set:11434"
 
     def test_load_config_no_ollama_skips_env_var(
@@ -192,8 +192,8 @@ name = "test-project"
 [llm]
 model = "anthropic:claude-sonnet-4-6"
 """
-        (temp_dir / "ntt.toml").write_text(config_content)
-        load_config(temp_dir / "ntt.toml")
+        (temp_dir / "ossature.toml").write_text(config_content)
+        load_config(temp_dir / "ossature.toml")
         assert "OLLAMA_BASE_URL" not in os.environ
 
     def test_load_config_without_llm_section_raises(self, temp_dir: Path):
@@ -205,9 +205,9 @@ version = "0.0.1"
 [output]
 language = "python"
 """
-        (temp_dir / "ntt.toml").write_text(config_content)
+        (temp_dir / "ossature.toml").write_text(config_content)
         with pytest.raises(ConfigError, match="Missing \\[llm\\] section"):
-            load_config(temp_dir / "ntt.toml")
+            load_config(temp_dir / "ossature.toml")
 
     def test_load_config_llm_without_model_raises(self, temp_dir: Path):
         config_content = """
@@ -221,9 +221,9 @@ language = "python"
 [llm]
 audit = "anthropic:claude-opus-4-6"
 """
-        (temp_dir / "ntt.toml").write_text(config_content)
+        (temp_dir / "ossature.toml").write_text(config_content)
         with pytest.raises(ConfigError, match="Missing 'model' in \\[llm\\]"):
-            load_config(temp_dir / "ntt.toml")
+            load_config(temp_dir / "ossature.toml")
 
     def test_tool_required_roles(self):
         assert "build" in TOOL_REQUIRED_ROLES
@@ -232,7 +232,7 @@ audit = "anthropic:claude-opus-4-6"
         assert "brief" not in TOOL_REQUIRED_ROLES
 
     def test_initialized_project_has_llm_section(self, initialized_project: Path):
-        config_path = initialized_project / "ntt.toml"
+        config_path = initialized_project / "ossature.toml"
         content = config_path.read_text()
         assert "[llm]" in content
         assert "model =" in content

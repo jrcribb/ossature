@@ -4,8 +4,8 @@ from unittest.mock import patch
 import pytest
 from click.testing import CliRunner
 
-from ntt.cli.main import cli
-from ntt.templates.manager import TemplateResult
+from ossature.cli.main import cli
+from ossature.templates.manager import TemplateResult
 
 
 @pytest.fixture
@@ -19,7 +19,7 @@ class TestInitCmd:
             result = runner.invoke(cli, ["init", "test-project"])
 
             assert result.exit_code == 0
-            assert (Path("test-project") / "ntt.toml").exists()
+            assert (Path("test-project") / "ossature.toml").exists()
             assert (Path("test-project") / ".gitignore").exists()
             assert (Path("test-project") / "specs").is_dir()
             assert (Path("test-project") / "context").is_dir()
@@ -30,7 +30,7 @@ class TestInitCmd:
             result = runner.invoke(cli, ["init"])
 
             assert result.exit_code == 0
-            assert Path("ntt.toml").exists()
+            assert Path("ossature.toml").exists()
             assert Path(".gitignore").exists()
 
     def test_init_skips_existing_files(self, runner: CliRunner, temp_dir: Path):
@@ -45,7 +45,7 @@ class TestInitCmd:
         error_result = TemplateResult(created=[], skipped=[], errors=["Something broke"])
         with runner.isolated_filesystem(temp_dir=temp_dir):
             with patch(
-                "ntt.cli.commands.init.TemplateManager.init_project",
+                "ossature.cli.commands.init.TemplateManager.init_project",
                 return_value=error_result,
             ):
                 result = runner.invoke(cli, ["init", "fail-project"])

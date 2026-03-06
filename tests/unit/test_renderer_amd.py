@@ -2,9 +2,9 @@ from pathlib import Path
 
 import pytest
 
-from ntt.models.amd import AMDSpec, Component, DataModel, Dependency
-from ntt.models.shared import Status
-from ntt.renderer.amd import (
+from ossature.models.amd import AMDSpec, Component, DataModel, Dependency
+from ossature.models.shared import Status
+from ossature.renderer.amd import (
     render_amd,
     render_component,
     render_data_model,

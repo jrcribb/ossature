@@ -1,8 +1,8 @@
 from conftest import make_smd
 
-from ntt.audit.interfaces import extract_interface_from_amds, propagate_to_smd_dependents
-from ntt.models.amd import AMDSpec, Component, DataModel
-from ntt.models.shared import Status
+from ossature.audit.interfaces import extract_interface_from_amds, propagate_to_smd_dependents
+from ossature.models.amd import AMDSpec, Component, DataModel
+from ossature.models.shared import Status
 
 
 class TestExtractInterfaceFromAmds:

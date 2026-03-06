@@ -2,8 +2,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from ntt.build.builder import BuildMode
-from ntt.cli.commands.build import _resolve_spec_filter
+from ossature.build.builder import BuildMode
+from ossature.cli.commands.build import _resolve_spec_filter
 
 
 class TestResolveSpecFilter:

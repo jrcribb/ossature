@@ -3,7 +3,7 @@ from unittest.mock import MagicMock
 from conftest import make_task
 from pydantic_ai.exceptions import AgentRunError, ModelHTTPError, UsageLimitExceeded
 
-from ntt.build.builder import _describe_llm_error, _format_llm_error_body, _print_llm_error
+from ossature.build.builder import _describe_llm_error, _format_llm_error_body, _print_llm_error
 
 
 class TestDescribeLlmError:

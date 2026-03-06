@@ -1,5 +1,5 @@
 [project]
-name = "ntt"
+name = "ossature"
 version = "0.1.0"
 description = "Specifiction and architecture driven code generation toolkit."
 readme = "README.md"
@@ -28,7 +28,7 @@ dev = [
 ]
 
 [project.scripts]
-ntt = "ntt.cli:app"
+ossature = "ossature.cli:app"
 
 [build-system]
 requires = ["uv_build>=0.9.26,<0.10.0"]

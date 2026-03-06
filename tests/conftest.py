@@ -4,11 +4,11 @@ from pathlib import Path
 
 import pytest
 
-from ntt.config.loader import BuildConfig, NTTConfig, OutputConfig
-from ntt.models.plan import Plan, PlanMeta, PlanTask, TaskStatus
-from ntt.models.shared import Status
-from ntt.models.smd import Priority, SMDSpec
-from ntt.templates.manager import TemplateManager
+from ossature.config.loader import BuildConfig, OssatureConfig, OutputConfig
+from ossature.models.plan import Plan, PlanMeta, PlanTask, TaskStatus
+from ossature.models.shared import Status
+from ossature.models.smd import Priority, SMDSpec
+from ossature.templates.manager import TemplateManager
 
 
 @pytest.fixture
@@ -25,8 +25,8 @@ def initialized_project(temp_dir: Path) -> Path:
 
 
 @pytest.fixture
-def sample_config(temp_dir: Path) -> NTTConfig:
-    return NTTConfig(
+def sample_config(temp_dir: Path) -> OssatureConfig:
+    return OssatureConfig(
         name="test-project",
         version="0.0.1",
         root=temp_dir,
@@ -42,8 +42,8 @@ def make_config(
     setup: str | None = None,
     verify: str | None = None,
     test: str | None = None,
-) -> NTTConfig:
-    return NTTConfig(
+) -> OssatureConfig:
+    return OssatureConfig(
         name="test",
         version="0.0.1",
         root=root,

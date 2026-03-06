@@ -3,10 +3,10 @@ from textwrap import dedent
 
 import pytest
 
-from ntt.models.amd import AMDSpec, Component, DataModel, Dependency
-from ntt.models.shared import Status
-from ntt.parsers.amd import AMDParseError, parse_amd, parse_amd_file
-from ntt.renderer.amd import render_amd
+from ossature.models.amd import AMDSpec, Component, DataModel, Dependency
+from ossature.models.shared import Status
+from ossature.parsers.amd import AMDParseError, parse_amd, parse_amd_file
+from ossature.renderer.amd import render_amd
 
 VALID_SPEC = dedent("""\
     # Architecture: Test System

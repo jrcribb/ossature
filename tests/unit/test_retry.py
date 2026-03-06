@@ -1,5 +1,5 @@
-from ntt.cli.commands.retry import _collect_dependents
-from ntt.models.plan import PlanTask, TaskStatus
+from ossature.cli.commands.retry import _collect_dependents
+from ossature.models.plan import PlanTask, TaskStatus
 
 
 def _make_task(id: str, depends_on: list[str] | None = None, status: str = "done") -> PlanTask:

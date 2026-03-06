@@ -2,7 +2,7 @@ from pathlib import Path
 
 from conftest import make_config, make_task
 
-from ntt.build.state import (
+from ossature.build.state import (
     BuildState,
     TaskState,
     compute_input_hash,
@@ -105,7 +105,7 @@ class TestComputeOutputHash:
 
 class TestLoadWriteState:
     def test_roundtrip(self, temp_dir: Path):
-        filepath = temp_dir / ".ntt" / "state.toml"
+        filepath = temp_dir / ".ossature" / "state.toml"
         state = BuildState()
         state.set("001", TaskState("sha256:aaa", "sha256:bbb", ["src/mod.py"]))
         state.set("002", TaskState("sha256:ccc", "sha256:ddd", ["src/types.py"]))
@@ -149,7 +149,7 @@ class TestLoadWriteState:
 
 class TestGetTaskWrittenFiles:
     def test_reads_from_output_toml(self, temp_dir: Path):
-        tasks_dir = temp_dir / ".ntt" / "tasks"
+        tasks_dir = temp_dir / ".ossature" / "tasks"
         task = make_task("001", "AUTH", outputs=["declared.py"])
         slug = "auth-task-001"
 
@@ -165,7 +165,7 @@ class TestGetTaskWrittenFiles:
         assert result == ["actual_a.py", "actual_b.py"]
 
     def test_falls_back_to_task_outputs(self, temp_dir: Path):
-        tasks_dir = temp_dir / ".ntt" / "tasks"
+        tasks_dir = temp_dir / ".ossature" / "tasks"
         task = make_task("001", "AUTH", outputs=["declared.py"])
 
         result = get_task_written_files(task, tasks_dir)

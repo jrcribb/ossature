@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from ntt.templates.manager import TemplateManager
+from ossature.templates.manager import TemplateManager
 
 
 class TestTemplateManager:
@@ -10,5 +10,5 @@ class TestTemplateManager:
 
         assert result.success
         assert (temp_dir / ".gitignore").exists()
-        assert (temp_dir / "ntt.toml").exists()
+        assert (temp_dir / "ossature.toml").exists()
         assert (temp_dir / "specs").is_dir()

@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 
 from conftest import make_config, make_plan, make_task
 
-from ntt.build.builder import (
+from ossature.build.builder import (
     _extract_commands_from_plan,
     _extract_executables,
     check_tool_availability,
@@ -39,7 +39,8 @@ class TestRunSetup:
         console = MagicMock()
 
         with patch(
-            "ntt.build.builder.subprocess.run", side_effect=subprocess.TimeoutExpired("sleep", 300)
+            "ossature.build.builder.subprocess.run",
+            side_effect=subprocess.TimeoutExpired("sleep", 300),
         ):
             assert run_setup(config, console) is False
 
@@ -49,7 +50,7 @@ class TestRunSetup:
         config = make_config(temp_dir, language="rust", setup="pwd")
         console = MagicMock()
 
-        with patch("ntt.build.builder.subprocess.run") as mock_run:
+        with patch("ossature.build.builder.subprocess.run") as mock_run:
             mock_run.return_value = subprocess.CompletedProcess(
                 args="pwd", returncode=0, stdout="", stderr=""
             )
@@ -129,7 +130,7 @@ class TestCheckToolAvailability:
         console = MagicMock()
         assert check_tool_availability(plan, config, console) is True
 
-    @patch("ntt.build.builder.shutil.which")
+    @patch("ossature.build.builder.shutil.which")
     def test_reports_all_missing(self, mock_which, temp_dir: Path):
         mock_which.return_value = None
         config = make_config(temp_dir, language="rust", setup="cargo init")

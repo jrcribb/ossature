@@ -3,12 +3,12 @@ from unittest.mock import MagicMock, patch
 
 from conftest import make_config, make_plan, make_task
 
-from ntt.build.builder import extract_spec_interface
-from ntt.models.plan import TaskStatus
+from ossature.build.builder import extract_spec_interface
+from ossature.models.plan import TaskStatus
 
 
 class TestExtractSpecInterface:
-    @patch("ntt.build.builder.Agent")
+    @patch("ossature.build.builder.Agent")
     def test_extracts_from_completed_task_outputs(self, mock_agent_cls, temp_dir: Path):
         output_dir = temp_dir / "output"
         output_dir.mkdir()
@@ -38,13 +38,13 @@ class TestExtractSpecInterface:
         assert "src/auth.py" in prompt
         assert "class Auth:" in prompt
 
-        iface_path = temp_dir / ".ntt" / "context" / "interfaces" / "AUTH.md"
+        iface_path = temp_dir / ".ossature" / "context" / "interfaces" / "AUTH.md"
         assert iface_path.exists()
         content = iface_path.read_text()
         assert "# Interface: AUTH" in content
         assert "@source: build" in content
 
-    @patch("ntt.build.builder.Agent")
+    @patch("ossature.build.builder.Agent")
     def test_skips_non_done_tasks(self, mock_agent_cls, temp_dir: Path):
         output_dir = temp_dir / "output"
         output_dir.mkdir()
@@ -65,7 +65,7 @@ class TestExtractSpecInterface:
 
         mock_agent_cls.return_value.run_sync.assert_not_called()
 
-    @patch("ntt.build.builder.Agent")
+    @patch("ossature.build.builder.Agent")
     def test_skips_missing_output_files(self, mock_agent_cls, temp_dir: Path):
         output_dir = temp_dir / "output"
         output_dir.mkdir()
@@ -84,7 +84,7 @@ class TestExtractSpecInterface:
 
         mock_agent_cls.return_value.run_sync.assert_not_called()
 
-    @patch("ntt.build.builder.Agent")
+    @patch("ossature.build.builder.Agent")
     def test_collects_outputs_from_multiple_tasks(self, mock_agent_cls, temp_dir: Path):
         output_dir = temp_dir / "output"
         (output_dir / "src").mkdir(parents=True)
@@ -114,7 +114,7 @@ class TestExtractSpecInterface:
         assert "src/models.py" in prompt
         assert "src/service.py" in prompt
 
-    @patch("ntt.build.builder.Agent")
+    @patch("ossature.build.builder.Agent")
     def test_only_collects_from_target_spec(self, mock_agent_cls, temp_dir: Path):
         output_dir = temp_dir / "output"
         (output_dir / "src").mkdir(parents=True)
