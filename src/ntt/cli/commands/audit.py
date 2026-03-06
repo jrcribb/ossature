@@ -150,6 +150,20 @@ def _has_fixable_findings(
     return any(f.suggestion for f in report.findings)
 
 
+def _fixable_finding_count(
+    report: SpecAuditReport | CrossSpecAuditReport,
+) -> int:
+    # Skip info-level findings when there are errors or warnings.
+    has_errors_or_warnings = any(
+        f.severity in (Severity.ERROR, Severity.WARNING) for f in report.findings
+    )
+    return sum(
+        1
+        for f in report.findings
+        if f.suggestion and not (f.severity == Severity.INFO and has_errors_or_warnings)
+    )
+
+
 def _build_spec_file_map(
     smd_files: list[Path],
     amd_files: list[Path],
@@ -500,9 +514,15 @@ def run_audit(
                     )
                     present_findings_and_confirm(console, status, report)
 
+                    fixable = _fixable_finding_count(report)
                     status.stop()
                     if not questionary.confirm(
-                        f"Auto-fix {len(report.findings)} finding(s) in {smd.spec_id}?",
+                        f"Auto-fix {fixable} finding(s) in {smd.spec_id}?"
+                        + (
+                            " (info-level findings deferred until errors/warnings are resolved)"
+                            if fixable < len(report.findings)
+                            else ""
+                        ),
                         default=False,
                     ).ask():
                         status.start()
@@ -588,9 +608,15 @@ def run_audit(
 
                     present_findings_and_confirm(console, status, cross_spec_report)
 
+                    fixable = _fixable_finding_count(cross_spec_report)
                     status.stop()
                     if not questionary.confirm(
-                        f"Auto-fix {len(cross_spec_report.findings)} cross-spec finding(s)?",
+                        f"Auto-fix {fixable} cross-spec finding(s)?"
+                        + (
+                            " (info-level findings deferred until errors/warnings are resolved)"
+                            if fixable < len(cross_spec_report.findings)
+                            else ""
+                        ),
                         default=False,
                     ).ask():
                         status.start()

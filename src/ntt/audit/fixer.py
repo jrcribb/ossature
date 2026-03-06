@@ -9,8 +9,11 @@ from rich.status import Status
 
 from ntt.audit.prompts import SPEC_FIXER_SYSTEM_PROMPT
 from ntt.config.loader import NTTConfig
-from ntt.models.audit import AuditFinding, CrossSpecFinding
+from ntt.models.audit import AuditFinding, CrossSpecFinding, Severity
 from ntt.shared import apply_edits
+
+# Process errors first, then warnings, then info
+_SEVERITY_ORDER = {Severity.ERROR: 0, Severity.WARNING: 1, Severity.INFO: 2}
 
 
 @dataclass
@@ -157,11 +160,15 @@ def fix_spec_findings(
     console: Console,
     status: Status,
 ) -> list[str]:
-    """Fix audit findings for a single spec. Returns list of edited file paths."""
     agent = _create_fixer_agent(config)
     all_edited: list[str] = []
 
-    for finding in findings:
+    has_errors_or_warnings = any(f.severity in (Severity.ERROR, Severity.WARNING) for f in findings)
+    sorted_findings = sorted(findings, key=lambda f: _SEVERITY_ORDER.get(f.severity, 99))
+
+    for finding in sorted_findings:
+        if finding.severity == Severity.INFO and has_errors_or_warnings:
+            continue
         prompt = _build_finding_prompt(finding, spec_file)
 
         # Save backup before each fix attempt
@@ -202,11 +209,16 @@ def fix_cross_spec_findings(
     console: Console,
     status: Status,
 ) -> list[str]:
-    """Fix cross-spec audit findings. Returns list of edited file paths."""
     agent = _create_fixer_agent(config)
     all_edited: list[str] = []
 
-    for finding in findings:
+    has_errors_or_warnings = any(f.severity in (Severity.ERROR, Severity.WARNING) for f in findings)
+    sorted_findings = sorted(findings, key=lambda f: _SEVERITY_ORDER.get(f.severity, 99))
+
+    for finding in sorted_findings:
+        if finding.severity == Severity.INFO and has_errors_or_warnings:
+            continue
+
         # Only include files for specs mentioned in this finding
         relevant_files = {sid: spec_files[sid] for sid in finding.specs if sid in spec_files}
         if not relevant_files:

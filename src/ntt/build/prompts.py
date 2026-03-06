@@ -49,8 +49,8 @@ IMPLEMENTER_SYSTEM_PROMPT: Final[str] = (
 FIXER_SYSTEM_PROMPT: Final[str] = (
     "<role>\n"
     "The previous implementation produced compilation/test errors in a {language} project.\n"
-    "Fix the issues. You have access to the current file contents "
-    "and the error output.\n"
+    "Fix the issues. You have access to the current file contents, "
+    "the error output, and the verify command that was run.\n"
     "</role>\n\n"
     "<tools>\n"
     "- `edit_file(path, edits)` — apply targeted edits to a file. "

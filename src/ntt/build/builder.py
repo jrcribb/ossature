@@ -614,16 +614,26 @@ def assemble_task_prompt(
     return "\n\n".join(sections)
 
 
-def assemble_fix_prompt(task: PlanTask, error_output: str, config: NTTConfig) -> str:
+def assemble_fix_prompt(
+    task: PlanTask, error_output: str, config: NTTConfig, verify_command: str = ""
+) -> str:
     sections = [f"<error_output>\n```\n{error_output}\n```\n</error_output>"]
 
-    for filepath in task.outputs:
+    if verify_command:
+        sections.append(f"<verify_command>\n{verify_command}\n</verify_command>")
+
+    # Include output files, falling back to inject_files for modify-in-place tasks
+    file_list = task.outputs if task.outputs else (task.inject_files or [])
+    for filepath in file_list:
         full_path = config.output_path / filepath
         if full_path.exists():
-            content = full_path.read_text()
-            sections.append(
-                f'<current_file path="{filepath}">\n```\n{content}\n```\n</current_file>'
-            )
+            try:
+                content = full_path.read_text()
+                sections.append(
+                    f'<current_file path="{filepath}">\n```\n{content}\n```\n</current_file>'
+                )
+            except UnicodeDecodeError:
+                pass
 
     sections.append(f"<task>\n**{task.title}**: {task.description}\n</task>")
 
@@ -631,6 +641,43 @@ def assemble_fix_prompt(task: PlanTask, error_output: str, config: NTTConfig) ->
 
 
 # Verification
+
+
+def is_verify_command_error(error_output: str, output_dir: Path) -> bool:
+    output_str = str(output_dir.resolve())
+    lines = error_output.strip().splitlines()
+    # Filter out hint/info lines to look at actual error content
+    error_lines = [
+        ln for ln in lines if not ln.strip().startswith(("Hint:", "hint:", "Info:", "info:"))
+    ]
+
+    if not error_lines:
+        return False
+
+    # If no error line references a file inside the output directory,
+    # it's likely a command-level problem, not a source-code problem.
+    has_source_ref = any(output_str in ln or "Error:" in ln and "/" in ln for ln in error_lines)
+
+    # Common patterns for command invocation errors
+    invocation_patterns = [
+        "arguments can only be given if",
+        "unknown option",
+        "unrecognized option",
+        "invalid option",
+        "unknown command",
+        "unrecognized command",
+        "command not found",
+        "no such subcommand",
+        "usage:",
+        "USAGE:",
+        "unexpected argument",
+        "invalid argument",
+        "not a valid",
+    ]
+    error_text = error_output.lower()
+    has_invocation_signal = any(pat.lower() in error_text for pat in invocation_patterns)
+
+    return has_invocation_signal and not has_source_ref
 
 
 def run_verify(command: str, cwd: Path) -> tuple[bool, str]:
@@ -741,6 +788,27 @@ def _print_verify_errors(console: Console, verify_output: str) -> None:
     )
 
 
+def _print_verify_command_error(console: Console, task: PlanTask, verify_output: str) -> None:
+    truncated = _truncate_output(verify_output)
+    body = (
+        f"The verify command itself appears to be invalid — this is not a code error.\n\n"
+        f"  Command: [bold]{task.verify}[/bold]\n\n"
+        f"{truncated}\n\n"
+        f"Update the [cyan]verify[/cyan] field for task [bold]{task.id}[/bold] "
+        f"in [cyan].ntt/plan.toml[/cyan], then run [cyan]ntt retry --only {task.id}[/cyan]."
+    )
+    console.print()
+    console.print(
+        Panel(
+            body,
+            title="[bold yellow]Invalid Verify Command[/bold yellow]",
+            border_style="yellow",
+            expand=False,
+            box=box.ROUNDED,
+        )
+    )
+
+
 @dataclass
 class TaskResult:
     success: bool
@@ -815,10 +883,16 @@ def build_task(
         save_task_output(task_dir, build_ctx.written_files, True, verify_output)
         return _make_result(True)
 
+    # Check if the error is a command invocation problem, not a code problem
+    if is_verify_command_error(verify_output, config.output_path):
+        _print_verify_command_error(console, task, verify_output)
+        save_task_output(task_dir, build_ctx.written_files, False, verify_output)
+        return _make_result(False)
+
     # Fix loop — fresh agent per attempt to avoid accumulating fix history
     for attempt in range(config.build.max_fix_attempts):
         build_ctx.set_phase(f"-- fixing ({attempt + 1}/{config.build.max_fix_attempts})")
-        fix_prompt = assemble_fix_prompt(task, verify_output, config)
+        fix_prompt = assemble_fix_prompt(task, verify_output, config, task.verify)
         (task_dir / f"fix-{attempt + 1}-prompt.md").write_text(fix_prompt)
 
         fix_agent = _create_fix_agent(config)
