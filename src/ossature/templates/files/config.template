@@ -1,5 +1,5 @@
 # Ossature Configuration
-# https://github.com/beshrkayali/ossature
+# https://github.com/ossature/ossature
 
 [project]
 name = "{name}"
