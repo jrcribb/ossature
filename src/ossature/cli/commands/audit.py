@@ -26,7 +26,15 @@ from ossature.audit.interfaces import (
     propagate_to_smd_dependents,
 )
 from ossature.audit.manifest import create_manifest, read_manifest, write_manifest
-from ossature.audit.planner import generate_plan, write_plan
+from ossature.audit.planner import (
+    collect_orphaned_output_files,
+    generate_plan,
+    load_plan,
+    remap_build_state,
+    remap_task_directories,
+    remove_orphaned_output_files,
+    write_plan,
+)
 from ossature.cli.decorators import requires_llm
 from ossature.config.loader import ConfigError, OssatureConfig, load_config
 from ossature.models.amd import AMDSpec
@@ -258,16 +266,24 @@ def generate_and_write_briefs(
     parsed_smds: list[SMDSpec],
     changed_spec_ids: set[str] | None = None,
 ) -> None:
-    status.update("Generating project brief")
-    project_brief = generate_project_brief(config=config, parsed_smds=parsed_smds)
-
     config.metadata_context_path.mkdir(parents=True, exist_ok=True)
     project_brief_filepath = config.metadata_context_path / "project-brief.md"
-    with open(project_brief_filepath, "w") as f:
-        f.write(project_brief.brief)
-        f.flush()
 
-    console.log(f"Project brief written to [bold]{project_brief_filepath}")
+    # Only regenerate the project brief when it doesn't exist or all specs changed.
+    # LLM-generated briefs produce slightly different text each run, which would
+    # invalidate input hashes for every task during incremental re-plans.
+    all_spec_ids = {s.spec_id for s in parsed_smds}
+    is_full_audit = changed_spec_ids is None or changed_spec_ids == all_spec_ids
+
+    if is_full_audit or not project_brief_filepath.exists():
+        status.update("Generating project brief")
+        project_brief = generate_project_brief(config=config, parsed_smds=parsed_smds)
+        with open(project_brief_filepath, "w") as f:
+            f.write(project_brief.brief)
+            f.flush()
+        console.log(f"Project brief written to [bold]{project_brief_filepath}")
+    else:
+        console.log("Project brief unchanged (incremental audit)")
 
     status.update("Generating spec briefs")
     smds_to_brief = (
@@ -718,13 +734,49 @@ def run_audit(
             status.update("Generating build plan")
             status.start()
 
-            plan = generate_plan(
+            # Load existing plan for incremental merge (unless --replan forces full regen)
+            existing_plan = load_plan(plan_filepath) if not replan else None
+            use_incremental = (
+                existing_plan is not None
+                and bool(audited_spec_ids)
+                and audited_spec_ids != {smd.spec_id for smd in parsed_smds}
+            )
+
+            plan, id_remap = generate_plan(
                 config=config,
                 parsed_smds=parsed_smds,
                 amd_by_spec=amd_by_spec,
                 graph=graph,
                 spec_reports=spec_reports,
+                changed_spec_ids=audited_spec_ids if use_incremental else None,
+                existing_plan=existing_plan if use_incremental else None,
             )
+
+            # Remap task directories and build state if incremental merge happened
+            if id_remap is not None and existing_plan is not None:
+                tasks_dir = config.metadata_path / "tasks"
+                remap_task_directories(tasks_dir, id_remap, audited_spec_ids, existing_plan)
+                state_filepath = config.metadata_path / "state.toml"
+                remap_build_state(state_filepath, id_remap, audited_spec_ids, existing_plan)
+
+                # Clean up output files from old tasks that no longer exist in the new plan
+                orphaned = collect_orphaned_output_files(existing_plan, plan, audited_spec_ids)
+                if orphaned:
+                    removed = remove_orphaned_output_files(orphaned, config.output_path)
+                    if removed:
+                        for f in removed:
+                            console.log(f"  [dim]Removed stale output: {f}[/dim]")
+                        console.log(
+                            f"[yellow]Removed {len(removed)} stale output file(s) "
+                            f"from previous plan[/yellow]"
+                        )
+
+                preserved = sum(1 for t in plan.tasks if t.spec not in audited_spec_ids)
+                replanned = sum(1 for t in plan.tasks if t.spec in audited_spec_ids)
+                console.log(
+                    f"Incremental re-plan: {preserved} task(s) preserved, "
+                    f"{replanned} task(s) re-planned"
+                )
 
             write_plan(plan, plan_filepath)
             console.log(f"Build plan written to [bold]{plan_filepath}")
