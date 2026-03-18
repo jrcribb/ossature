@@ -1,7 +1,7 @@
 [project]
 name = "ossature"
-version = "0.1.0"
-description = "Specifiction and architecture driven code generation toolkit."
+version = "0.0.1"
+description = "Specification and architecture driven code generation toolkit."
 readme = "README.md"
 license = { text = "MIT" }
 authors = [
@@ -18,6 +18,12 @@ dependencies = [
     "tomli>=2.4.0",
     "tomli-w>=1.2.0",
 ]
+
+[project.urls]
+Homepage = "https://docs.ossature.dev"
+Repository = "https://github.com/ossature/ossature"
+Documentation = "https://docs.ossature.dev"
+Changelog = "https://github.com/ossature/ossature/blob/master/CHANGELOG.md"
 
 [dependency-groups]
 dev = [
