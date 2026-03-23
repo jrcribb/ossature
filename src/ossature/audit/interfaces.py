@@ -5,6 +5,7 @@ from ossature.config.loader import OssatureConfig
 from ossature.models.amd import AMDSpec
 from ossature.models.smd import SMDSpec
 from ossature.renderer.smd import render_smd
+from ossature.shared.llm import run_agent_sync
 
 
 def extract_interface_from_amds(
@@ -63,11 +64,13 @@ def infer_interface_from_smd(
     smd: SMDSpec,
     dependency_interfaces: dict[str, str] | None = None,
 ) -> str:
+    model = config.llm.model_for("interface")
     agent = Agent(
-        config.llm.model_for("interface"),
+        model,
         instructions=INTERFACE_INFERENCE_SYSTEM_PROMPT.format(
             language=config.output.language,
         ),
+        retries=config.llm.retries,
     )
 
     sections: list[str] = [render_smd(smd)]
@@ -83,7 +86,13 @@ def infer_interface_from_smd(
             sections.append(interface)
             sections.append("")
 
-    result = agent.run_sync("\n".join(sections))
+    result = run_agent_sync(
+        agent,
+        "\n".join(sections),
+        operation="interface inference",
+        model_name=model,
+        spec_id=smd.spec_id,
+    )
 
     return f"# Interface: {smd.spec_id}\n\n@source: llm\n\n{result.output}"
 
