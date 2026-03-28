@@ -40,7 +40,7 @@ from ossature.models.plan import Plan, PlanTask, TaskStatus
 from ossature.models.smd import SMDSpec
 from ossature.renderer.amd import render_component, render_data_model, render_dependency
 from ossature.renderer.smd import render_example, render_requirement
-from ossature.shared import apply_edits
+from ossature.shared import FileEdit, apply_edits
 
 
 class BuildMode(Enum):
@@ -159,7 +159,7 @@ def _register_tools(agent: Agent[BuildContext, str]) -> None:
         return f"Written: {path} ({len(content)} bytes, {line_count} lines)"
 
     @agent.tool
-    def edit_file(ctx: RunContext[BuildContext], path: str, edits: list[dict[str, str]]) -> str:
+    def edit_file(ctx: RunContext[BuildContext], path: str, edits: list[FileEdit]) -> str:
         full_path = _resolve_sandboxed(ctx.deps.output_dir, path, ctx.deps.console)
         try:
             if not full_path.exists():
@@ -360,7 +360,26 @@ def _create_fix_agent(config: OssatureConfig) -> Agent[BuildContext, str]:
     return agent
 
 
-# Rate-limit retry
+# Agent run retry
+
+_STRUCTURAL_ERROR_PATTERNS: tuple[str, ...] = (
+    "missing key",
+    "is not an object",
+    "Expected a JSON array",
+    "Could not parse edits JSON",
+    "must both be strings",
+    "Field required",
+    "validation error",
+)
+
+_EDIT_SCHEMA_REMINDER: str = (
+    "\n\n<important>\n"
+    "IMPORTANT: When using `edit_file`, the `edits` parameter must be a list of objects "
+    'with exactly two keys: "old" and "new". Example:\n'
+    'edit_file(path="src/main.py", edits=[{"old": "text to find", "new": "replacement"}])\n'
+    "Do NOT use key names like 'old_str', 'new_str', 'search', 'replace', or any variant.\n"
+    "</important>"
+)
 
 
 def _extract_last_retry_error(messages: list[Any]) -> str | None:
@@ -374,6 +393,14 @@ def _extract_last_retry_error(messages: list[Any]) -> str | None:
     return None
 
 
+def _is_structural_tool_error(detail: str | None) -> bool:
+    """Check if a retry error indicates structural schema confusion (not content errors)."""
+    if not detail:
+        return False
+    detail_lower = detail.lower()
+    return any(p.lower() in detail_lower for p in _STRUCTURAL_ERROR_PATTERNS)
+
+
 def _run_with_retry(
     agent: Agent[BuildContext, str],
     prompt: str,
@@ -382,6 +409,7 @@ def _run_with_retry(
     max_retries: int = 5,
     base_delay: float = 30.0,
 ) -> Any:
+    _structural_retried = False
     for attempt in range(max_retries):
         with capture_run_messages() as messages:
             try:
@@ -399,6 +427,14 @@ def _run_with_retry(
                 time.sleep(delay)
             except AgentRunError as e:
                 detail = _extract_last_retry_error(messages)
+                if _is_structural_tool_error(detail) and not _structural_retried:
+                    _structural_retried = True
+                    console.log(
+                        "    [yellow]Structural tool-call error — "
+                        "retrying with fresh context[/yellow]"
+                    )
+                    prompt = prompt + _EDIT_SCHEMA_REMINDER
+                    continue
                 if detail:
                     e._last_retry_detail = detail  # type: ignore[attr-defined]
                 raise
@@ -1531,6 +1567,25 @@ def execute_build(
                     )
                     stopped = True
                     break
+
+    # Re-snapshot output hashes for all DONE tasks.  Later tasks may have
+    # edited files originally created by earlier tasks (e.g. scaffold + impl),
+    # so the hashes stored at task-completion time can be stale.  Recomputing
+    # them against the final disk state prevents false "output modified"
+    # invalidation on the next build.
+    for task in plan.tasks:
+        if task.status != TaskStatus.DONE:
+            continue
+        stored = state.get(task.id)
+        if not stored:
+            continue
+        current_output_hash = compute_output_hash(stored.written_files, config)
+        if stored.output_hash != current_output_hash:
+            state.set(
+                task.id,
+                TaskState(stored.input_hash, current_output_hash, stored.written_files),
+            )
+    write_state(state, state_filepath)
 
     if stopped:
         return
