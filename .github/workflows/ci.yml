@@ -13,35 +13,44 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@cec208311dfd045dd5311c1add060b2062131d57
         with:
           enable-cache: true
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.14"
           allow-prereleases: true
 
       - run: uv sync --frozen
 
-      - run: make check
+      - uses: pre-commit/action@v3.0.1
+
+      - run: make test-cov
+
+      - uses: codecov/codecov-action@v5
+        with:
+          files: coverage.xml
+          fail_ci_if_error: false
+
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: coverage-report
+          path: htmlcov/
 
   docs:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: streetsidesoftware/cspell-action@v8
-        with:
-          files: 'docs/**/*.md'
-
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@cec208311dfd045dd5311c1add060b2062131d57
         with:
           enable-cache: true
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.14"
           allow-prereleases: true

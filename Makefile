@@ -1,4 +1,4 @@
-.PHONY: lint format mypy check docs docs-serve docs-check
+.PHONY: lint format mypy check docs docs-serve docs-check update-deps
 
 lint:
 	uv run ruff check src/ tests/
@@ -15,7 +15,7 @@ test:
 	uv run pytest tests/ -v
 
 test-cov:
-	uv run pytest tests/ --cov=src/ossature --cov-report=term-missing --cov-report=html
+	uv run pytest tests/ --cov=src/ossature --cov-report=term-missing --cov-report=html --cov-report=xml
 
 check: lint typecheck test
 
@@ -27,3 +27,7 @@ docs-serve:
 
 docs-check: docs
 	npx cspell "docs/**/*.md"
+
+update-deps:
+	uv lock --upgrade
+	uv sync
