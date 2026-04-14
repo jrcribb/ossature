@@ -8,7 +8,7 @@ import time
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 import content_types
 import tomli_w
@@ -34,6 +34,7 @@ from ossature.build.state import (
     compute_output_hash,
     get_task_created_files,
     load_state,
+    make_task_slug,
     write_state,
 )
 from ossature.config.loader import OssatureConfig
@@ -43,6 +44,7 @@ from ossature.models.smd import SMDSpec
 from ossature.renderer.amd import render_component, render_data_model, render_dependency
 from ossature.renderer.smd import render_example, render_requirement
 from ossature.shared import FileEdit, apply_edits
+from ossature.shared.llm import UsageTracker
 
 _MAX_NOOP_RETRIES: int = 2
 
@@ -413,14 +415,19 @@ def _run_with_retry(
     console: Console,
     max_retries: int = 5,
     base_delay: float = 30.0,
+    tracker: UsageTracker | None = None,
+    model_name: str | None = None,
 ) -> Any:
     _structural_retried = False
     for attempt in range(max_retries):
         with capture_run_messages() as messages:
             try:
-                return agent.run_sync(
+                result = agent.run_sync(
                     prompt, deps=deps, usage_limits=UsageLimits(request_limit=200)
                 )
+                if tracker is not None:
+                    tracker.add(result.usage(), model_name=model_name)
+                return result
             except json.JSONDecodeError:
                 if attempt >= max_retries - 1:
                     raise
@@ -801,11 +808,6 @@ def run_verify(command: str, cwd: Path) -> tuple[bool, str]:
 # Task building
 
 
-def make_task_slug(task: PlanTask) -> str:
-    slug = task.title.lower().replace(" ", "-").replace(":", "").replace("/", "-")
-    return slug.strip("-")
-
-
 def save_task_output(
     task_dir: Path,
     created_files: list[str],
@@ -830,6 +832,7 @@ def extract_spec_interface(
     config: OssatureConfig,
     console: Console,
     status: Status,
+    tracker: UsageTracker | None = None,
 ) -> None:
     source_files: list[tuple[str, str]] = []
     for task in plan.tasks:
@@ -851,12 +854,15 @@ def extract_spec_interface(
     status.update(f"Extracting interface: {spec_id}")
     console.log(f"  [cyan]Extracting interface for {spec_id}...[/cyan]")
 
+    model = config.llm.model_for("interface")
     agent = Agent(
-        config.llm.model_for("interface"),
+        model,
         instructions=INTERFACE_EXTRACTION_SYSTEM_PROMPT.format(language=language),
         retries=config.llm.retries,
     )
     result = agent.run_sync("\n".join(sections))
+    if tracker is not None:
+        tracker.add(result.usage(), model_name=model)
 
     interface_content = f"# Interface: {spec_id}\n\n@source: build\n\n{result.output}"
 
@@ -919,6 +925,7 @@ class TaskResult:
     elapsed: float = 0.0
     created_files: list[str] = field(default_factory=list)
     edited_files: list[str] = field(default_factory=list)
+    usage: UsageTracker = field(default_factory=UsageTracker)
 
     def summary(self) -> str:
         parts = []
@@ -928,7 +935,68 @@ class TaskResult:
         if self.total_lines:
             parts.append(f"{self.total_lines} lines")
         parts.append(f"{self.elapsed:.1f}s")
+        parts.append(self.usage.format_usage())
         return ", ".join(parts)
+
+
+class BuildBackend(Protocol):
+    def generate(
+        self,
+        prompt: str,
+        ctx: BuildContext,
+        console: Console,
+        tracker: UsageTracker,
+        model_name: str,
+    ) -> str: ...
+
+    def fix(
+        self,
+        prompt: str,
+        ctx: BuildContext,
+        console: Console,
+        tracker: UsageTracker,
+        model_name: str,
+    ) -> str: ...
+
+    def verify(self, command: str, cwd: Path) -> tuple[bool, str]: ...
+
+
+class DefaultBuildBackend:
+    def __init__(self, config: OssatureConfig) -> None:
+        self._config = config
+
+    def generate(
+        self,
+        prompt: str,
+        ctx: BuildContext,
+        console: Console,
+        tracker: UsageTracker,
+        model_name: str,
+    ) -> str:
+        agent = _create_impl_agent(self._config)
+        result = _run_with_retry(
+            agent, prompt, ctx, console, tracker=tracker, model_name=model_name
+        )
+        output: str = result.output
+        return output
+
+    def fix(
+        self,
+        prompt: str,
+        ctx: BuildContext,
+        console: Console,
+        tracker: UsageTracker,
+        model_name: str,
+    ) -> str:
+        agent = _create_fix_agent(self._config)
+        result = _run_with_retry(
+            agent, prompt, ctx, console, tracker=tracker, model_name=model_name
+        )
+        output: str = result.output
+        return output
+
+    def verify(self, command: str, cwd: Path) -> tuple[bool, str]:
+        return run_verify(command, cwd)
 
 
 def build_task(
@@ -938,8 +1006,10 @@ def build_task(
     console: Console,
     status: Status,
     verbose: bool = False,
+    *,
+    backend: BuildBackend | None = None,
 ) -> TaskResult:
-    impl_agent = _create_impl_agent(config)
+    backend = backend or DefaultBuildBackend(config)
 
     slug = make_task_slug(task)
     task_dir = config.metadata_path / "tasks" / f"{task.id}-{slug}"
@@ -959,11 +1029,15 @@ def build_task(
     )
 
     t0 = time.monotonic()
+    task_usage = UsageTracker()
+    build_model = config.llm.model_for("build")
 
     # Implementation
     build_ctx.set_phase("-- generating...")
-    result = _run_with_retry(impl_agent, prompt, build_ctx, console)
-    (task_dir / "response.md").write_text(result.output)
+    gen_output = backend.generate(
+        prompt, build_ctx, console, tracker=task_usage, model_name=build_model
+    )
+    (task_dir / "response.md").write_text(gen_output)
 
     def _make_result(success: bool) -> TaskResult:
         return TaskResult(
@@ -973,6 +1047,7 @@ def build_task(
             elapsed=time.monotonic() - t0,
             created_files=list(build_ctx.created_files),
             edited_files=list(build_ctx.edited_files),
+            usage=task_usage,
         )
 
     if not task.verify:
@@ -981,7 +1056,7 @@ def build_task(
 
     # Verification
     build_ctx.set_phase(f"-- verifying ({task.verify})")
-    passed, verify_output = run_verify(task.verify, config.output_path)
+    passed, verify_output = backend.verify(task.verify, config.output_path)
 
     if passed:
         save_task_output(
@@ -1008,9 +1083,10 @@ def build_task(
         # Snapshot file lists to detect no-op responses
         files_before = set(build_ctx.created_files) | set(build_ctx.edited_files)
 
-        fix_agent = _create_fix_agent(config)
         try:
-            fix_result = _run_with_retry(fix_agent, fix_prompt, build_ctx, console)
+            fix_output = backend.fix(
+                fix_prompt, build_ctx, console, tracker=task_usage, model_name=build_model
+            )
         except AgentRunError as e:
             console.log(
                 f"    [yellow]Fixer agent error on attempt {attempt + 1}: {e.message}[/yellow]"
@@ -1019,7 +1095,7 @@ def build_task(
             attempt += 1
             continue
 
-        (task_dir / f"fix-{attempt + 1}-response.md").write_text(fix_result.output)
+        (task_dir / f"fix-{attempt + 1}-response.md").write_text(fix_output)
 
         # Detect no-op: fixer made no file changes
         files_after = set(build_ctx.created_files) | set(build_ctx.edited_files)
@@ -1047,7 +1123,7 @@ def build_task(
                 continue
 
         build_ctx.set_phase(f"-- re-verifying ({task.verify})")
-        passed, verify_output = run_verify(task.verify, config.output_path)
+        passed, verify_output = backend.verify(task.verify, config.output_path)
         if passed:
             save_task_output(
                 task_dir, build_ctx.created_files, build_ctx.edited_files, True, verify_output
@@ -1339,6 +1415,7 @@ def execute_build(
     completed_before = sum(1 for t in plan.tasks if t.status == TaskStatus.DONE)
     skip_next = False
     stopped = False
+    total_usage = UsageTracker()
 
     # Load build state for input/output hash verification
     state = load_state(state_filepath)
@@ -1368,7 +1445,7 @@ def execute_build(
         if not all(t.status == TaskStatus.DONE for t in tasks_by_spec[task.spec]):
             return
         try:
-            extract_spec_interface(task.spec, plan, config, console, status)
+            extract_spec_interface(task.spec, plan, config, console, status, tracker=total_usage)
         except AgentRunError as e:
             summary, _ = _describe_llm_error(e)
             console.log(
@@ -1527,6 +1604,7 @@ def execute_build(
                 continue
 
             success = result.success
+            total_usage += result.usage
 
             if success:
                 task.status = TaskStatus.DONE
@@ -1597,6 +1675,7 @@ def execute_build(
                         status.start()
                         stopped = True
                         break
+                    total_usage += retry_result.usage
                     if retry_result.success:
                         task.status = TaskStatus.DONE
                         rebuilt_specs.add(task.spec)
@@ -1668,6 +1747,8 @@ def execute_build(
         summary.append(f"  Failed: {failed}", style="bold red")
     if skipped:
         summary.append(f"  Skipped: {skipped}", style="dim")
+    if total_usage.requests > 0:
+        summary.append(f"  LLM: {total_usage.format_usage()}", style="dim")
 
     console.print()
     console.print(

@@ -21,6 +21,7 @@ classifiers = [
 dependencies = [
     "click>=8.3.1",
     "content-types>=0.3.0",
+    "genai-prices>=0.0.51",
     "pydantic>=2.12.5",
     "pydantic-ai>=1.62.0",
     "questionary>=2.1.1",
@@ -56,16 +57,20 @@ build-backend = "uv_build"
 [tool.uv]
 exclude-newer = "7 days"
 
+# mistralai 2.x removed the Mistral class that pydantic-ai imports
+constraint-dependencies = ["mistralai<2"]
+
 [tool.ruff]
 line-length = 100
 target-version = "py314"
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "N", "W", "UP", "B", "S", "SIM", "PT", "RUF", "C4", "PIE"]
+select = ["E", "F", "I", "N", "W", "UP", "B", "S", "SIM", "PT", "RUF", "C4", "PIE", "PLC0415"]
 ignore = ["S602", "S110", "S310"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**/*.py" = ["S101"]
+"src/**/*.py" = ["PLC0415"]
 
 [tool.mypy]
 python_version = "3.14"
