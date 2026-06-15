@@ -23,6 +23,17 @@ def render_component(component: Component) -> str:
     lines.append(component.interface)
     lines.append("```")
 
+    # The contracts marker is required by the parser, so an empty list
+    # renders as an explicit 'None'.
+    lines.append("")
+    if component.contracts:
+        lines.append("**Contracts:**")
+        lines.append("")
+        for contract in component.contracts:
+            lines.append(f"- {contract}")
+    else:
+        lines.append("**Contracts:** None")
+
     if component.depends_on:
         lines.append("")
         lines.append(f"**Depends on:** {', '.join(component.depends_on)}")
