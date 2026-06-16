@@ -345,7 +345,7 @@ def _create_impl_agent(config: OssatureConfig) -> Agent[BuildContext, str]:
         config.llm.model_for("build"),
         system_prompt=render("build.implementer", language=config.output.language),
         deps_type=BuildContext,
-        retries=config.llm.tool_retries,
+        tool_retries=config.llm.tool_retries,
         model_settings={"max_tokens": config.build.max_output_tokens},
     )
     _register_tools(agent)
@@ -357,7 +357,7 @@ def _create_fix_agent(config: OssatureConfig) -> Agent[BuildContext, str]:
         config.llm.model_for("build"),
         system_prompt=render("build.fixer", language=config.output.language),
         deps_type=BuildContext,
-        retries=config.llm.tool_retries,
+        tool_retries=config.llm.tool_retries,
         model_settings={"max_tokens": config.build.max_output_tokens},
     )
     _register_tools(agent)
@@ -923,7 +923,7 @@ def extract_spec_interface(
     agent = Agent(
         model,
         instructions=render("build.interface_extraction", language=language),
-        retries=config.llm.retries,
+        output_retries=config.llm.retries,
     )
     result = agent.run_sync("\n".join(sections))
     if tracker is not None:
@@ -1485,8 +1485,6 @@ def _command_groups_from_plan(plan: Plan, config: OssatureConfig) -> list[list[s
         groups.append(list(config.build.setup))
     if config.build.verify:
         groups.append(list(config.build.verify))
-    if config.build.test:
-        groups.append(list(config.build.test))
     for task in plan.tasks:
         if task.verify:
             groups.append(list(task.verify))

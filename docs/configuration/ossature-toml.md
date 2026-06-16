@@ -38,9 +38,12 @@ Ossature discovers spec files automatically by scanning `spec_dir` recursively. 
 [output]
 dir = "output"           # where generated code goes
 language = "python"      # target language
+# framework = "django"   # optional framework hint added to prompts
 ```
 
 The `language` field tells the LLM what language to generate. It's not limited to a fixed list, but you'll get best results with common languages like python, typescript, rust, go, lua, etc.
+
+The optional `framework` field adds a short hint to the generated prompts so the model targets a specific framework. It also feeds the project brief, so changing it regenerates that brief on the next audit.
 
 ## Audit Section
 
@@ -60,10 +63,9 @@ max_inline_lines = 200                # files above this aren't inlined in fix p
 max_output_tokens = 32768             # per-call output token limit for the build LLM
 setup = ["cargo init"]                # optional: run before the first task
 verify = ["cargo check"]              # optional: override default verification
-test = ["cargo test"]                 # optional: override default test command
 ```
 
-The `setup`, `verify`, and `test` fields are lists of shell commands. Each list item runs in its own shell, in order, and the build stops as soon as any command exits non-zero. A bare string is also accepted for backwards compatibility, so `verify = "cargo check"` keeps working and is treated the same as `verify = ["cargo check"]`. New configs should use lists. They're easier to read for multi-step pipelines and the pre-flight tool check can look at each step on its own.
+The `setup` and `verify` fields are lists of shell commands. Each list item runs in its own shell, in order, and the build stops as soon as any command exits non-zero. A bare string is also accepted for backwards compatibility, so `verify = "cargo check"` keeps working and is treated the same as `verify = ["cargo check"]`. New configs should use lists. They're easier to read for multi-step pipelines and the pre-flight tool check can look at each step on its own.
 
 ```toml
 [build]
@@ -76,7 +78,7 @@ verify = [
 
 The `setup` commands run once before the first build task. Useful for project initialization that the LLM shouldn't handle.
 
-The `verify` and `test` commands override what Ossature uses to check generated code. If not set, the LLM determines verification commands per task based on the language and project structure.
+The `verify` list is read before the build for the pre-flight tool check, which confirms the tools its commands need are on PATH. It is not the per-task verification. The planner chooses a `verify` command for each task during audit, and the build runs that command after the task completes.
 
 The `max_inline_lines` field controls when files are inlined in fix prompts. When a task fails verification, Ossature sends the fixer LLM the error output and the current file contents. Files with more lines than this threshold are not inlined; the fixer uses its `read_lines` and `grep_file` tools to inspect them instead. This prevents blowing up the prompt on large files. Defaults to 200.
 

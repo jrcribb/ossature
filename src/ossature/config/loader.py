@@ -23,13 +23,6 @@ class OutputConfig:
 
 
 @dataclass
-class TestConfig:
-    runner: str = "pytest"
-    coverage: bool = True
-    coverage_threshold: float = 80.0
-
-
-@dataclass
 class AuditConfig:
     max_fix_cycles: int = 3
 
@@ -44,7 +37,6 @@ class BuildConfig:
     max_output_tokens: int = 32768
     setup: list[str] = field(default_factory=list)
     verify: list[str] = field(default_factory=list)
-    test: list[str] = field(default_factory=list)
 
 
 DEFAULT_MODEL = "anthropic:claude-sonnet-4-6"
@@ -94,7 +86,6 @@ class OssatureConfig:
     context_dir: str = "context"
 
     output: OutputConfig = field(default_factory=OutputConfig)
-    test: TestConfig = field(default_factory=TestConfig)
     audit: AuditConfig = field(default_factory=AuditConfig)
     build: BuildConfig = field(default_factory=BuildConfig)
     llm: LLMConfig = field(default_factory=LLMConfig)
@@ -161,16 +152,9 @@ def find_config(start_path: Path | None = None) -> Path | None:
 
 def _parse_output_config(data: dict[str, Any]) -> OutputConfig:
     return OutputConfig(
-        dir=data.get("dir", "."),
+        dir=data.get("dir", "output"),
         language=data.get("language", "python"),
-    )
-
-
-def _parse_test_config(data: dict[str, Any]) -> TestConfig:
-    return TestConfig(
-        runner=data.get("runner", "pytest"),
-        coverage=data.get("coverage", True),
-        coverage_threshold=float(data.get("coverage_threshold", 80.0)),
+        framework=data.get("framework"),
     )
 
 
@@ -205,7 +189,6 @@ def _parse_build_config(data: dict[str, Any]) -> BuildConfig:
         max_output_tokens=int(data.get("max_output_tokens", 32768)),
         setup=_coerce_command_list(data.get("setup")),
         verify=_coerce_command_list(data.get("verify")),
-        test=_coerce_command_list(data.get("test")),
     )
 
 
@@ -261,7 +244,6 @@ def load_config(path: Path | None = None) -> OssatureConfig:
         spec_dir=project.get("spec_dir", "specs"),
         context_dir=project.get("context_dir", "context"),
         output=_parse_output_config(data.get("output", {})),
-        test=_parse_test_config(data.get("test", {})),
         audit=_parse_audit_config(data.get("audit", {})),
         build=_parse_build_config(data.get("build", {})),
         llm=_parse_llm_config(llm_data),
@@ -375,7 +357,7 @@ def _check_model_string(
 def _warn_redundant_cd(config: OssatureConfig) -> None:
     output_dir = config.output.dir
     prefix = f"cd {output_dir}"
-    fields = {"setup": config.build.setup, "verify": config.build.verify, "test": config.build.test}
+    fields = {"setup": config.build.setup, "verify": config.build.verify}
     for field_name, commands in fields.items():
         for command in commands:
             stripped = command.lstrip()
