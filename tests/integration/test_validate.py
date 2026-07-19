@@ -352,3 +352,291 @@ class TestDetectCycle:
 
     def test_dep_not_in_graph(self):
         assert _detect_cycle({"A": ["EXTERNAL"]}) is None
+
+
+MINIMAL_VMD = """\
+@spec {spec_id}
+
+{group}(input_data)
+basic | "sample" | "processed"
+"""
+
+
+class TestValidateVMD:
+    def test_validates_smd_with_vmd(self, runner: CliRunner, project_dir: Path):
+        write_smd(project_dir, "AUTH", "Authentication Module")
+        vmd_path = project_dir / "specs" / "auth.vmd"
+        vmd_path.write_text(MINIMAL_VMD.format(spec_id="AUTH", group="core_requirement"))
+
+        result = run_in_project(runner, project_dir, ["validate"])
+
+        assert result.exit_code == 0
+        assert "VMD" in result.output
+
+    def test_vmd_parse_error_fails(self, runner: CliRunner, project_dir: Path):
+        write_smd(project_dir, "AUTH", "Authentication Module")
+        vmd_path = project_dir / "specs" / "auth.vmd"
+        vmd_path.write_text("core_requirement(x)\nbasic | 1 | 2\n")
+
+        result = run_in_project(runner, project_dir, ["validate"])
+
+        assert result.exit_code == 1
+        assert "@spec" in result.output
+
+    def test_orphan_vmd_fails(self, runner: CliRunner, project_dir: Path):
+        write_smd(project_dir, "AUTH", "Authentication Module")
+        vmd_path = project_dir / "specs" / "other.vmd"
+        vmd_path.write_text(MINIMAL_VMD.format(spec_id="NOPE", group="core_requirement"))
+
+        result = run_in_project(runner, project_dir, ["validate"])
+
+        assert result.exit_code == 1
+        assert "NOPE" in result.output
+
+    def test_duplicate_group_across_vmds_fails(self, runner: CliRunner, project_dir: Path):
+        write_smd(project_dir, "AUTH", "Authentication Module")
+        for name in ("a.vmd", "b.vmd"):
+            (project_dir / "specs" / name).write_text(
+                MINIMAL_VMD.format(spec_id="AUTH", group="core_requirement")
+            )
+
+        result = run_in_project(runner, project_dir, ["validate"])
+
+        assert result.exit_code == 1
+        assert "duplicate verification group" in result.output
+
+    def test_unresolved_target_warns_without_amd(self, runner: CliRunner, project_dir: Path):
+        write_smd(project_dir, "AUTH", "Authentication Module")
+        vmd_path = project_dir / "specs" / "auth.vmd"
+        vmd_path.write_text(MINIMAL_VMD.format(spec_id="AUTH", group="unrelated_thing"))
+
+        result = run_in_project(runner, project_dir, ["validate"])
+
+        assert result.exit_code == 0
+        assert "WARNING" in result.output
+        assert "unrelated_thing" in result.output
+
+    def test_target_resolves_against_amd_interface(self, runner: CliRunner, project_dir: Path):
+        write_smd(project_dir, "AUTH", "Authentication Module")
+        amd_path = project_dir / "specs" / "auth.amd"
+        amd_path.write_text(MINIMAL_AMD.format(title="Auth Architecture", spec_id="AUTH"))
+        vmd_path = project_dir / "specs" / "auth.vmd"
+        vmd_path.write_text(MINIMAL_VMD.format(spec_id="AUTH", group="do_something"))
+
+        result = run_in_project(runner, project_dir, ["validate"])
+
+        assert result.exit_code == 0
+        assert "does not appear" not in result.output
+
+    def test_missing_target_in_amd_interface_warns(self, runner: CliRunner, project_dir: Path):
+        write_smd(project_dir, "AUTH", "Authentication Module")
+        amd_path = project_dir / "specs" / "auth.amd"
+        amd_path.write_text(MINIMAL_AMD.format(title="Auth Architecture", spec_id="AUTH"))
+        vmd_path = project_dir / "specs" / "auth.vmd"
+        vmd_path.write_text(MINIMAL_VMD.format(spec_id="AUTH", group="not_in_interface"))
+
+        result = run_in_project(runner, project_dir, ["validate"])
+
+        assert result.exit_code == 0
+        assert "WARNING" in result.output
+        assert "does not appear" in result.output
+
+    def test_verbose_lists_vmd_files(self, runner: CliRunner, project_dir: Path):
+        write_smd(project_dir, "AUTH", "Authentication Module")
+        vmd_path = project_dir / "specs" / "auth.vmd"
+        vmd_path.write_text(MINIMAL_VMD.format(spec_id="AUTH", group="core_requirement"))
+
+        result = run_in_project(runner, project_dir, ["-v", "validate"])
+
+        assert result.exit_code == 0
+        assert "Validating 1 VMD(s)" in result.output
+
+
+class TestValidateCoverage:
+    def test_coverage_table_shown_with_vmd(self, runner: CliRunner, project_dir: Path):
+        write_smd(project_dir, "AUTH", "Authentication Module")
+        (project_dir / "specs" / "auth.vmd").write_text(
+            MINIMAL_VMD.format(spec_id="AUTH", group="core_requirement")
+        )
+
+        result = run_in_project(runner, project_dir, ["validate"])
+
+        assert result.exit_code == 0
+        assert "Requirement Coverage" in result.output
+        assert "core_requirement" in result.output
+
+    def test_no_coverage_table_without_vmd(self, runner: CliRunner, project_dir: Path):
+        write_smd(project_dir, "AUTH", "Authentication Module")
+
+        result = run_in_project(runner, project_dir, ["validate"])
+
+        assert result.exit_code == 0
+        assert "Requirement Coverage" not in result.output
+
+    def test_uncovered_requirement_warns(self, runner: CliRunner, project_dir: Path):
+        write_smd(project_dir, "AUTH", "Authentication Module")
+        (project_dir / "specs" / "auth.vmd").write_text(
+            MINIMAL_VMD.format(spec_id="AUTH", group="unrelated_thing")
+        )
+
+        result = run_in_project(runner, project_dir, ["validate"])
+
+        assert result.exit_code == 0
+        assert "no covering" in result.output
+
+    def test_require_coverage_fails_validation(self, runner: CliRunner, project_dir: Path):
+        write_smd(project_dir, "AUTH", "Authentication Module")
+        (project_dir / "specs" / "auth.vmd").write_text(
+            MINIMAL_VMD.format(spec_id="AUTH", group="unrelated_thing")
+        )
+        config_path = project_dir / "ossature.toml"
+        config_path.write_text(config_path.read_text() + "\n[test]\nrequire_coverage = true\n")
+
+        result = run_in_project(runner, project_dir, ["validate"])
+
+        assert result.exit_code == 1
+        assert "no covering" in result.output
+
+
+class TestValidateCoverageBranches:
+    def test_exempt_requirement_shown(self, runner: CliRunner, project_dir: Path):
+        write_smd(project_dir, "AUTH", "Authentication Module")
+        smd_path = project_dir / "specs" / "auth.smd"
+        smd_path.write_text(
+            smd_path.read_text().replace(
+                "### Core Requirement", "### Core Requirement {.no-verify}"
+            )
+        )
+        (project_dir / "specs" / "auth.vmd").write_text(
+            MINIMAL_VMD.format(spec_id="AUTH", group="unrelated_helper")
+        )
+
+        result = run_in_project(runner, project_dir, ["validate"])
+
+        assert result.exit_code == 0
+        assert "exempt" in result.output
+        assert "no covering" not in result.output
+
+    def test_plan_tasks_feed_coverage(self, runner: CliRunner, project_dir: Path):
+        write_smd(project_dir, "AUTH", "Authentication Module")
+        (project_dir / "specs" / "auth.vmd").write_text(
+            MINIMAL_VMD.format(spec_id="AUTH", group="unrelated_helper")
+        )
+        ossature_dir = project_dir / ".ossature"
+        ossature_dir.mkdir()
+        (ossature_dir / "plan.toml").write_text(
+            '[meta]\ngenerated_at = "now"\ntotal_tasks = 1\nspecs = ["AUTH"]\n\n'
+            "[[task]]\n"
+            'id = "001"\nspec = "AUTH"\ntitle = "Golden test"\ndescription = ""\n'
+            "outputs = []\ndepends_on = []\nspec_refs = []\narch_refs = []\n"
+            'status = "pending"\nverify = []\ncovers = ["Core Requirement"]\n'
+        )
+
+        result = run_in_project(runner, project_dir, ["validate"])
+
+        assert result.exit_code == 0
+        assert "task:001" in result.output
+        assert "no covering" not in result.output
+
+    def test_outdated_plan_format_is_tolerated(self, runner: CliRunner, project_dir: Path):
+        write_smd(project_dir, "AUTH", "Authentication Module")
+        (project_dir / "specs" / "auth.vmd").write_text(
+            MINIMAL_VMD.format(spec_id="AUTH", group="core_requirement")
+        )
+        ossature_dir = project_dir / ".ossature"
+        ossature_dir.mkdir()
+        (ossature_dir / "plan.toml").write_text(
+            '[meta]\ngenerated_at = "now"\ntotal_tasks = 1\nspecs = ["AUTH"]\n\n'
+            "[[task]]\n"
+            'id = "001"\nspec = "AUTH"\ntitle = "Old"\ndescription = ""\n'
+            "outputs = []\ndepends_on = []\n"
+            'spec_refs = ["AUTH:overview"]\narch_refs = []\n'
+            'status = "pending"\nverify = []\n'
+        )
+
+        result = run_in_project(runner, project_dir, ["validate"])
+
+        assert result.exit_code == 0
+        assert "Requirement Coverage" in result.output
+
+    def test_verbose_vmd_parse_error_lists_details(self, runner: CliRunner, project_dir: Path):
+        write_smd(project_dir, "AUTH", "Authentication Module")
+        (project_dir / "specs" / "auth.vmd").write_text("f(x)\na | nope | 2\n")
+
+        result = run_in_project(runner, project_dir, ["-v", "validate"])
+
+        assert result.exit_code == 1
+        assert "Missing required directive: @spec" in result.output
+
+
+class TestValidateVMDBranches:
+    def test_dangling_arch_fails(self, runner: CliRunner, project_dir: Path):
+        write_smd(project_dir, "AUTH", "Authentication Module")
+        (project_dir / "specs" / "auth.vmd").write_text(
+            "@spec AUTH\n@arch NOPE\n\ncore_requirement(x)\na | 1 | 2\n"
+        )
+
+        result = run_in_project(runner, project_dir, ["validate"])
+
+        assert result.exit_code == 1
+        assert "points @arch at" in result.output
+
+    def test_command_scenarios_skip_amd_target_check(self, runner: CliRunner, project_dir: Path):
+        write_smd(project_dir, "AUTH", "Authentication Module")
+        (project_dir / "specs" / "auth.amd").write_text(
+            MINIMAL_AMD.format(title="Auth Architecture", spec_id="AUTH")
+        )
+        (project_dir / "specs" / "auth.vmd").write_text(
+            '@spec AUTH\n\n@covers "Core Requirement"\nscenario runs the tool:\n'
+            "when $ mytool x\nthen exit 0\n"
+        )
+
+        result = run_in_project(runner, project_dir, ["validate"])
+
+        assert result.exit_code == 0
+        assert "does not appear" not in result.output
+
+    def test_call_scenario_target_checked_against_amd(self, runner: CliRunner, project_dir: Path):
+        write_smd(project_dir, "AUTH", "Authentication Module")
+        (project_dir / "specs" / "auth.amd").write_text(
+            MINIMAL_AMD.format(title="Auth Architecture", spec_id="AUTH")
+        )
+        (project_dir / "specs" / "auth.vmd").write_text(
+            '@spec AUTH\n\n@covers "Core Requirement"\nscenario calls a ghost:\n'
+            "when ghost_function(1)\nthen ok\n"
+        )
+
+        result = run_in_project(runner, project_dir, ["validate"])
+
+        assert result.exit_code == 0
+        assert "does not appear" in result.output
+
+    def test_error_coverage_fraction_shown(self, runner: CliRunner, project_dir: Path):
+        write_smd(project_dir, "AUTH", "Authentication Module")
+        smd_path = project_dir / "specs" / "auth.smd"
+        smd_path.write_text(
+            smd_path.read_text().replace(
+                "**Returns:** processed output",
+                "**Returns:** processed output\n\n**Errors:**\n\n"
+                "- Bad input -> raise ValueError with a message",
+            )
+        )
+        (project_dir / "specs" / "auth.vmd").write_text(
+            '@spec AUTH\n\ncore_requirement(x)\nbasic | 1 | "ok"\nbad | null | !ValueError\n'
+        )
+
+        result = run_in_project(runner, project_dir, ["validate"])
+
+        assert result.exit_code == 0
+        assert "1/1" in result.output
+
+    def test_dangling_covers_target_warns(self, runner: CliRunner, project_dir: Path):
+        write_smd(project_dir, "AUTH", "Authentication Module")
+        (project_dir / "specs" / "auth.vmd").write_text(
+            '@spec AUTH\n\n@covers nonexistent-thing\ncore_requirement(x)\nbasic | 1 | "ok"\n'
+        )
+
+        result = run_in_project(runner, project_dir, ["validate"])
+
+        assert result.exit_code == 0
+        assert "matches no requirement" in result.output
