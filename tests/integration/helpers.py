@@ -8,7 +8,12 @@ from pydantic_ai import Agent as _Agent
 from pydantic_ai.usage import RunUsage
 
 from ossature.cli.main import cli
-from ossature.models.audit import AuditFinding, CrossSpecAuditReport, SpecAuditReport
+from ossature.models.audit import (
+    AuditFinding,
+    CrossSpecAuditReport,
+    CrossSpecFinding,
+    SpecAuditReport,
+)
 from ossature.models.plan import PlannerTask, SpecTaskPlan
 
 # Templates
@@ -132,13 +137,20 @@ def run_in_project(runner: CliRunner, project_dir: Path, args: list[str], input:
 def _make_mock_run_sync(
     spec_plans: dict[str, SpecTaskPlan],
     audit_findings: list[AuditFinding] | None = None,
+    prompt_log: list[tuple[str, str]] | None = None,
+    cross_findings: list[CrossSpecFinding] | None = None,
 ):
     _mock_usage = RunUsage(input_tokens=0, output_tokens=0, requests=1)
     _audit_call_count: dict[str, int] = {}
+    _cross_call_count = [0]
 
     def mock_run_sync(self, prompt, *args, **kwargs):
         result = MagicMock()
         result.usage = _mock_usage
+
+        if prompt_log is not None:
+            output_type = getattr(self, "_output_type", None)
+            prompt_log.append((getattr(output_type, "__name__", str(output_type)), prompt))
 
         # Planner agent: output_type is SpecTaskPlan
         if getattr(self, "_output_type", None) is SpecTaskPlan:
@@ -168,6 +180,11 @@ def _make_mock_run_sync(
 
         # Cross-spec audit: output_type is CrossSpecAuditReport
         if getattr(self, "_output_type", None) is CrossSpecAuditReport:
+            # Findings on the first call, empty on re-audit
+            if cross_findings and _cross_call_count[0] == 0:
+                _cross_call_count[0] += 1
+                result.output = CrossSpecAuditReport(findings=cross_findings)
+                return result
             result.output = CrossSpecAuditReport(findings=[])
             return result
 
@@ -190,13 +207,20 @@ def _mock_agent_init(self, *args, **kwargs):
 def patch_all_agents(
     spec_plans: dict[str, SpecTaskPlan],
     audit_findings: list[AuditFinding] | None = None,
+    prompt_log: list[tuple[str, str]] | None = None,
+    cross_findings: list[CrossSpecFinding] | None = None,
 ):
     stack = ExitStack()
     stack.enter_context(patch("pydantic_ai.Agent.__init__", _mock_agent_init))
     stack.enter_context(
         patch(
             "pydantic_ai.Agent.run_sync",
-            _make_mock_run_sync(spec_plans, audit_findings=audit_findings),
+            _make_mock_run_sync(
+                spec_plans,
+                audit_findings=audit_findings,
+                prompt_log=prompt_log,
+                cross_findings=cross_findings,
+            ),
         )
     )
     return stack

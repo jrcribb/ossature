@@ -5,7 +5,7 @@ import questionary
 from rich.console import Console
 from rich.panel import Panel
 
-from ossature.cli.wizard.amd import ask_or_cancel, ask_spec_id, enum_choices
+from ossature.cli.wizard.common import ask_or_cancel, ask_spec_id, enum_choices
 from ossature.models.shared import Status
 from ossature.models.vmd import VMDSpec
 from ossature.parsers.vmd import VMDParseError, parse_vmd
@@ -78,7 +78,7 @@ def prompt_command_scenario(console: Console, index: int) -> list[str]:
     return lines
 
 
-def prompt_vmd_spec(name: str, spec_dir: Path, console: Console) -> VMDSpec | None:
+def prompt_vmd_spec(spec_dir: Path, console: Console) -> VMDSpec | None:
     try:
         console.print(
             Panel(

@@ -18,6 +18,7 @@ from ossature.build.state import BuildState, TaskState, load_state, write_state
 from ossature.models.audit import (
     AuditFinding,
     CrossSpecAuditReport,
+    CrossSpecFinding,
     Severity,
     SpecAuditReport,
 )
@@ -572,6 +573,213 @@ class TestAuditFixerTracking:
         assert result.exit_code == 0
         # Fixer was invoked (first audit returns error, triggers fix, re-audit is clean)
         assert "LLM usage:" in result.output
+
+    def test_fixed_spec_content_reaches_plan_generation(
+        self,
+        runner: CliRunner,
+        project_dir: Path,
+    ):
+        write_smd(project_dir, "AUTH", "Authentication Module")
+
+        error_finding = AuditFinding(
+            severity=Severity.ERROR,
+            location="Requirements > Core Requirement",
+            issue="Missing error handling specification",
+            suggestion="Add error cases for invalid input",
+        )
+
+        fixed_marker = "Core requirement description WITH ERROR CASES."
+
+        def fake_fix_spec_findings(**kwargs):
+            path = kwargs["spec_dir"] / kwargs["spec_file"]
+            path.write_text(path.read_text().replace("Core requirement description.", fixed_marker))
+            return [kwargs["spec_file"]]
+
+        prompt_log: list[tuple[str, str]] = []
+        with (
+            patch_all_agents(
+                {"AUTH": AUTH_PLAN},
+                audit_findings=[error_finding],
+                prompt_log=prompt_log,
+            ),
+            patch(
+                "ossature.cli.commands.audit.fix_spec_findings",
+                fake_fix_spec_findings,
+            ),
+        ):
+            result = run_in_project(runner, project_dir, ["audit", "--errors-ok"])
+
+        assert result.exit_code == 0
+        # The planner must see the fixed spec content, not the pre-fix parse
+        planner_prompts = [p for name, p in prompt_log if name == "SpecTaskPlan"]
+        assert planner_prompts
+        assert fixed_marker in planner_prompts[-1]
+
+    def test_fixed_amd_content_reaches_plan_generation(
+        self,
+        runner: CliRunner,
+        project_dir: Path,
+    ):
+        write_smd(project_dir, "AUTH", "Authentication Module")
+        amd_path = project_dir / "specs" / "auth.amd"
+        amd_text = (
+            "---\n"
+            "spec: AUTH\n"
+            "status: draft\n"
+            "---\n\n"
+            "# Architecture: Auth\n\n"
+            "## Overview\n\n"
+            "Auth architecture.\n\n"
+            "## Components\n\n"
+            "### AuthService\n\n"
+            "@path: src/auth/service.py\n\n"
+            "Handles authentication.\n\n"
+            "**Interface:**\n\n"
+            "```python\n"
+            "class AuthService: ...\n"
+            "```\n\n"
+            "**Contracts:** None\n"
+        )
+        amd_path.write_text(amd_text)
+
+        error_finding = AuditFinding(
+            severity=Severity.ERROR,
+            location="Components > AuthService",
+            issue="Missing contract detail",
+            suggestion="State the token contract",
+        )
+
+        fixed_marker = "Handles authentication WITH TOKENS."
+
+        def fake_fix_spec_findings(**kwargs):
+            amd_path.write_text(
+                amd_path.read_text().replace("Handles authentication.", fixed_marker)
+            )
+            return ["auth.amd"]
+
+        prompt_log: list[tuple[str, str]] = []
+        with (
+            patch_all_agents(
+                {"AUTH": AUTH_PLAN},
+                audit_findings=[error_finding],
+                prompt_log=prompt_log,
+            ),
+            patch(
+                "ossature.cli.commands.audit.fix_spec_findings",
+                fake_fix_spec_findings,
+            ),
+        ):
+            result = run_in_project(runner, project_dir, ["audit", "--errors-ok"])
+
+        assert result.exit_code == 0, result.output
+        planner_prompts = [p for name, p in prompt_log if name == "SpecTaskPlan"]
+        assert planner_prompts
+        assert fixed_marker in planner_prompts[-1]
+
+
+class TestAuditInteractiveConfirms:
+    def _confirm(self, answer: bool | None):
+        confirm = MagicMock()
+        confirm.return_value.ask.return_value = answer
+        return patch("ossature.cli.commands.audit.questionary.confirm", confirm)
+
+    def test_reaudit_and_replan_declined(self, runner: CliRunner, project_dir: Path):
+        write_smd(project_dir, "AUTH", "Authentication Module")
+        with patch_all_agents({"AUTH": AUTH_PLAN}):
+            assert run_in_project(runner, project_dir, ["audit"]).exit_code == 0
+
+        with patch_all_agents({"AUTH": AUTH_PLAN}), self._confirm(False):
+            result = run_in_project(runner, project_dir, ["audit", "--interactive", "--replan"])
+
+        assert result.exit_code == 0
+        assert "Plan regeneration skipped" in result.output
+
+    def test_per_spec_fix_declined(self, runner: CliRunner, project_dir: Path):
+        write_smd(project_dir, "AUTH", "Authentication Module")
+        finding = AuditFinding(
+            severity=Severity.ERROR,
+            location="Requirements > Core Requirement",
+            issue="Missing error handling",
+            suggestion="Add error cases",
+        )
+
+        with (
+            patch_all_agents({"AUTH": AUTH_PLAN}, audit_findings=[finding]),
+            self._confirm(False),
+        ):
+            result = run_in_project(runner, project_dir, ["audit", "--interactive", "--errors-ok"])
+
+        assert result.exit_code == 0
+
+    def test_cross_spec_fix_declined(self, runner: CliRunner, project_dir: Path):
+        write_smd(project_dir, "AUTH", "Authentication Module")
+        write_smd(project_dir, "API", "API Module", depends="AUTH")
+        cross = CrossSpecFinding(
+            severity=Severity.ERROR,
+            specs=["AUTH", "API"],
+            issue="Interface mismatch",
+            suggestion="Align the interface",
+        )
+
+        with (
+            patch_all_agents({"AUTH": AUTH_PLAN, "API": API_PLAN}, cross_findings=[cross]),
+            self._confirm(False),
+        ):
+            result = run_in_project(runner, project_dir, ["audit", "--interactive", "--errors-ok"])
+
+        assert result.exit_code == 0
+
+
+class TestBuildInteractiveFailure:
+    CORE_FAIL_PLAN = make_spec_task_plan(
+        [
+            {"title": "Core: Module", "outputs": ["src/core.py"], "verify": "false"},
+        ]
+    )
+    CORE_OK_PLAN = make_spec_task_plan(
+        [
+            {"title": "Core: Module", "outputs": ["src/core.py"]},
+        ]
+    )
+
+    def _audit_and_seed(self, runner: CliRunner, project_dir: Path, plan: SpecTaskPlan):
+        write_smd(project_dir, "AUTH", "Authentication Module")
+        with patch_all_agents({"AUTH": plan}):
+            assert run_in_project(runner, project_dir, ["audit"]).exit_code == 0
+        # The mocked implementer writes nothing; seed the output file
+        core = project_dir / "output" / "src" / "core.py"
+        core.parent.mkdir(parents=True)
+        core.write_text("x = 1\n")
+
+    def test_retry_after_verify_failure_still_failing_stops(
+        self, runner: CliRunner, project_dir: Path
+    ):
+        self._audit_and_seed(runner, project_dir, self.CORE_FAIL_PLAN)
+
+        with patch_all_agents({"AUTH": self.CORE_FAIL_PLAN}):
+            result = run_in_project(runner, project_dir, ["build"], input="r\n")
+
+        assert "etry task" in result.output
+        assert "still failing" in result.output
+        plan = load_plan(project_dir / ".ossature" / "plan.toml")
+        assert plan is not None
+        assert plan.tasks[0].status == TaskStatus.FAILED
+
+    def test_skip_after_llm_error(self, runner: CliRunner, project_dir: Path):
+        self._audit_and_seed(runner, project_dir, self.CORE_OK_PLAN)
+
+        def raising_run_sync(self, prompt, *args, **kwargs):
+            raise AgentRunError("model exploded")
+
+        with ExitStack() as stack:
+            stack.enter_context(patch("pydantic_ai.Agent.__init__", _mock_agent_init))
+            stack.enter_context(patch("pydantic_ai.Agent.run_sync", raising_run_sync))
+            result = run_in_project(runner, project_dir, ["build"], input="s\n")
+
+        assert "etry task" in result.output
+        plan = load_plan(project_dir / ".ossature" / "plan.toml")
+        assert plan is not None
+        assert plan.tasks[0].status == TaskStatus.SKIPPED
 
 
 class TestBuildWorkflow:
@@ -1175,3 +1383,151 @@ class TestCrossSpecInvalidation:
         assert after is not None
         # Reworded-but-equivalent interface still rebuilds the dependent.
         assert after.input_hash != input_hash_before
+
+
+AMD_WITH_UNKNOWN_SECTION = (
+    "---\n"
+    "spec: AUTH\n"
+    "status: draft\n"
+    "---\n\n"
+    "# Architecture: Auth\n\n"
+    "## Overview\n\n"
+    "Auth architecture.\n\n"
+    "## Components\n\n"
+    "### AuthService\n\n"
+    "@path: src/auth/service.py\n\n"
+    "Handles authentication.\n\n"
+    "**Interface:**\n\n"
+    "```python\n"
+    "class AuthService: ...\n"
+    "```\n\n"
+    "**Contracts:** None\n\n"
+    "## Custom Stuff\n\n"
+    "Ignored by the parser.\n"
+)
+
+
+class TestAuditRunBranches:
+    def _confirm(self, answer: bool | None):
+        confirm = MagicMock()
+        confirm.return_value.ask.return_value = answer
+        return patch("ossature.cli.commands.audit.questionary.confirm", confirm)
+
+    def test_no_spec_files(self, runner: CliRunner, project_dir: Path):
+        result = run_in_project(runner, project_dir, ["audit"])
+        assert result.exit_code == 0
+        assert "No spec files found" in result.output
+
+    def test_amd_parse_warning_logged(self, runner: CliRunner, project_dir: Path):
+        write_smd(project_dir, "AUTH", "Authentication Module")
+        (project_dir / "specs" / "auth.amd").write_text(AMD_WITH_UNKNOWN_SECTION)
+
+        with patch_all_agents({"AUTH": AUTH_PLAN}):
+            result = run_in_project(runner, project_dir, ["audit"])
+
+        assert result.exit_code == 0
+        assert "Unknown section" in result.output
+
+    def test_missing_audit_data_forces_reaudit(self, runner: CliRunner, project_dir: Path):
+        write_smd(project_dir, "AUTH", "Authentication Module")
+        with patch_all_agents({"AUTH": AUTH_PLAN}):
+            assert run_in_project(runner, project_dir, ["audit"]).exit_code == 0
+
+        (project_dir / ".ossature" / "audits" / "AUTH" / "response.json").unlink()
+        with patch_all_agents({"AUTH": AUTH_PLAN}):
+            result = run_in_project(runner, project_dir, ["audit"])
+
+        assert result.exit_code == 0
+        assert "Missing audit data for: AUTH" in result.output
+
+    def test_interactive_fix_accept_runs_fixer(self, runner: CliRunner, project_dir: Path):
+        write_smd(project_dir, "AUTH", "Authentication Module")
+        finding = AuditFinding(
+            severity=Severity.ERROR,
+            location="Requirements > Core Requirement",
+            issue="Missing error handling",
+            suggestion="Add error cases",
+        )
+        fake_fix = MagicMock(return_value=[])
+
+        with (
+            patch_all_agents({"AUTH": AUTH_PLAN}, audit_findings=[finding]),
+            patch("ossature.cli.commands.audit.fix_spec_findings", fake_fix),
+            self._confirm(True),
+        ):
+            result = run_in_project(runner, project_dir, ["audit", "--interactive", "--errors-ok"])
+
+        assert result.exit_code == 0
+        fake_fix.assert_called_once()
+        assert "No edits made" in result.output
+
+    def test_cross_spec_cached_on_unchanged_rerun(self, runner: CliRunner, project_dir: Path):
+        write_smd(project_dir, "AUTH", "Authentication Module")
+        write_smd(project_dir, "API", "API Module", depends="AUTH")
+        plans = {"AUTH": AUTH_PLAN, "API": API_PLAN}
+
+        with patch_all_agents(plans):
+            assert run_in_project(runner, project_dir, ["audit"]).exit_code == 0
+            result = run_in_project(runner, project_dir, ["audit"])
+
+        assert result.exit_code == 0
+        assert "No changes detected" in result.output
+
+    def test_cross_spec_fix_applies_and_reparses(self, runner: CliRunner, project_dir: Path):
+        write_smd(project_dir, "AUTH", "Authentication Module")
+        write_smd(project_dir, "API", "API Module", depends="AUTH")
+        cross = CrossSpecFinding(
+            severity=Severity.ERROR,
+            specs=["AUTH", "API"],
+            issue="Interface mismatch",
+            suggestion="Align the interface",
+        )
+        fixed_marker = "Overview text ALIGNED WITH API."
+
+        def fake_cross_fix(**kwargs):
+            path = project_dir / "specs" / "auth.smd"
+            path.write_text(path.read_text().replace("Overview text.", fixed_marker))
+            return ["auth.smd"]
+
+        prompt_log: list[tuple[str, str]] = []
+        with (
+            patch_all_agents(
+                {"AUTH": AUTH_PLAN, "API": API_PLAN},
+                cross_findings=[cross],
+                prompt_log=prompt_log,
+            ),
+            patch("ossature.cli.commands.audit.fix_cross_spec_findings", fake_cross_fix),
+        ):
+            result = run_in_project(runner, project_dir, ["audit", "--errors-ok"])
+
+        assert result.exit_code == 0
+        assert "Fixed 1 file(s) for cross-spec findings" in result.output
+        # The re-parsed fix reaches plan generation
+        planner_prompts = [p for name, p in prompt_log if name == "SpecTaskPlan"]
+        assert any(fixed_marker in p for p in planner_prompts)
+
+    def test_replan_accepted_regenerates_plan(self, runner: CliRunner, project_dir: Path):
+        write_smd(project_dir, "AUTH", "Authentication Module")
+        with patch_all_agents({"AUTH": AUTH_PLAN}):
+            assert run_in_project(runner, project_dir, ["audit"]).exit_code == 0
+
+        with patch_all_agents({"AUTH": AUTH_PLAN}), self._confirm(True):
+            result = run_in_project(runner, project_dir, ["audit", "--interactive", "--replan"])
+
+        assert result.exit_code == 0
+        assert "Build plan written" in result.output
+
+    def test_invalid_config_reports_error(self, runner: CliRunner, project_dir: Path):
+        (project_dir / "ossature.toml").write_text(
+            "[project]\n"
+            'name = "testapp"\n'
+            'version = "0.1.0"\n'
+            'spec_dir = "specs"\n'
+            'context_dir = "context"\n\n'
+            "[output]\n"
+            'dir = "output"\n'
+            'language = "python"\n'
+        )
+        result = run_in_project(runner, project_dir, ["audit"])
+        assert result.exit_code == 1
+        assert "Error:" in result.output

@@ -1,10 +1,10 @@
 from pathlib import Path
 from unittest.mock import patch
 
-import pytest
 from click.testing import CliRunner
 from helpers import run_in_project, write_smd
 
+from ossature.cli.commands.new import create_template_smd_spec
 from ossature.parsers.amd import parse_amd_file
 from ossature.parsers.smd import parse_smd_file
 from ossature.parsers.vmd import parse_vmd, parse_vmd_file
@@ -39,6 +39,29 @@ class TestNewSmdCommand:
         assert "constraint(s)" in result.output
         assert "example(s)" in result.output
 
+    def test_interactive_saves_wizard_result(self, runner: CliRunner, project_dir: Path):
+        wizard_spec = create_template_smd_spec("my-feature")
+        with patch("ossature.cli.commands.new.prompt_smd_spec", return_value=wizard_spec):
+            result = run_in_project(runner, project_dir, ["new", "my-feature", "-i"])
+
+        assert result.exit_code == 0
+        assert (project_dir / "specs" / "my-feature.smd").exists()
+
+    def test_interactive_cancel_writes_nothing(self, runner: CliRunner, project_dir: Path):
+        with patch("ossature.cli.commands.new.prompt_smd_spec", return_value=None):
+            result = run_in_project(runner, project_dir, ["new", "my-feature", "-i"])
+
+        assert result.exit_code == 0
+        assert not (project_dir / "specs" / "my-feature.smd").exists()
+
+    def test_existing_file_fails_cleanly(self, runner: CliRunner, project_dir: Path):
+        run_in_project(runner, project_dir, ["new", "my-feature"])
+        result = run_in_project(runner, project_dir, ["new", "my-feature"])
+
+        assert result.exit_code == 1
+        assert "already exists" in result.output
+        assert "Traceback" not in result.output
+
 
 class TestNewAmdCommand:
     def test_creates_amd_file(self, runner: CliRunner, project_dir: Path):
@@ -58,7 +81,7 @@ class TestNewAmdCommand:
 
         spec = parse_amd_file(project_dir / "specs" / "my-arch.amd")
         assert spec.spec_id == "AUTH"
-        assert spec.title == "Architecture: My Arch"
+        assert spec.title == "My Arch"
 
 
 class TestNewVmdCommand:
@@ -137,10 +160,9 @@ class TestNewVmdInteractive:
         existing = project_dir / "specs" / "auth-checks.vmd"
         existing.write_text("@spec AUTH\n\nf(x)\na | 1 | 2\n")
 
-        with (
-            patch("ossature.cli.commands.new.ask_spec_id", return_value="AUTH"),
-            pytest.raises(FileExistsError),
-        ):
-            run_in_project(runner, project_dir, ["new", "auth-checks", "-t", "vmd"])
+        with patch("ossature.cli.commands.new.ask_spec_id", return_value="AUTH"):
+            result = run_in_project(runner, project_dir, ["new", "auth-checks", "-t", "vmd"])
 
+        assert result.exit_code == 1
+        assert "already exists" in result.output
         assert existing.read_text().startswith("@spec AUTH")

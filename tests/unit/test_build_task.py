@@ -1,13 +1,13 @@
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
+import tomli
 from pydantic_ai.exceptions import AgentRunError
 
-from ossature.build.builder import (
-    BuildContext,
-    build_task,
-)
+from ossature.build.builder import _run_task_dispatch
+from ossature.build.task import build_task, save_task_output
+from ossature.build.tools import BuildContext
 from ossature.models.plan import PlanTask
 from ossature.models.review import ReviewIssue, ReviewReport
 from ossature.shared.llm import UsageTracker
@@ -237,6 +237,29 @@ class TestBuildTaskFixLoop:
         # 2 fix calls: 1 no-op + 1 real
         assert len(backend.fix_calls) == 2
 
+    def test_noop_fix_retry_sends_strengthened_prompt(self, tmp_path: Path) -> None:
+        """The retry after a no-op fix must carry the tool-use reminder."""
+
+        class NoopThenFixBackend(FakeBackend):
+            def fix(self, prompt, ctx, console, tracker, model_name):
+                self.fix_calls.append(prompt)
+                if len(self.fix_calls) == 1:
+                    # No-op: don't add any files
+                    return "no changes"
+                ctx.created_files.append("fixed.rs")
+                return "applied fix"
+
+        backend = NoopThenFixBackend(
+            verify_results=[
+                (False, "error"),
+                (True, "ok"),
+            ],
+        )
+        result = _run(tmp_path, backend)
+        assert result.success is True
+        assert "<important>" not in backend.fix_calls[0]
+        assert "MUST use edit_file or write_file" in backend.fix_calls[1]
+
 
 class TestBuildTaskImplementerNoop:
     def test_noop_implementer_retries_then_succeeds(self, tmp_path: Path) -> None:
@@ -459,3 +482,57 @@ class TestBuildTaskReview:
         assert (task_dir / "review-2-prompt.md").exists()
         assert (task_dir / "review-2-response.json").exists()
         assert (task_dir / "review-fix-1-prompt.md").exists()
+
+
+class TestRunTaskDispatch:
+    """Task routing shared by the main build loop and the interactive retry."""
+
+    def _route(self, task: PlanTask, tmp_path: Path) -> str:
+        config = _make_config(tmp_path)
+        with (
+            patch("ossature.build.builder.build_verify_task", return_value="verify"),
+            patch("ossature.build.builder.build_copy_task", return_value="copy"),
+            patch("ossature.build.builder.build_task", return_value="task"),
+            patch("ossature.build.builder.final_output_paths", return_value=[]),
+        ):
+            return _run_task_dispatch(
+                task, config, "prompt", MagicMock(), MagicMock(), False, MagicMock(), {}, {}
+            )
+
+    def test_verify_task_routes_to_verify_builder(self, tmp_path: Path) -> None:
+        task = _make_task()
+        task.kind = "verify"
+        assert self._route(task, tmp_path) == "verify"
+
+    def test_copy_task_routes_to_copy_builder(self, tmp_path: Path) -> None:
+        task = _make_task()
+        task.source = ["assets/logo.png"]
+        assert self._route(task, tmp_path) == "copy"
+
+    def test_default_task_routes_to_build_task(self, tmp_path: Path) -> None:
+        assert self._route(_make_task(), tmp_path) == "task"
+
+
+class TestSaveTaskOutput:
+    def test_edited_files_persisted_when_present(self, tmp_path: Path) -> None:
+        save_task_output(tmp_path, ["a.py"], ["b.py"], True, "ok")
+        with open(tmp_path / "output.toml", "rb") as f:
+            data = tomli.load(f)
+        assert data["created_files"] == ["a.py"]
+        assert data["edited_files"] == ["b.py"]
+        assert data["success"] is True
+
+
+class TestReviewFixAgentError:
+    def test_review_fix_agent_error_retries_next_attempt(self, tmp_path: Path) -> None:
+        # First review fails, first review-fix raises, second fix lands,
+        # re-review passes
+        backend = FakeBackend(
+            review_results=[_review_fail(), ReviewReport(passed=True)],
+            fix_side_effects=[AgentRunError("fixer down"), "applied"],
+        )
+        task = _make_reviewable_task()
+        config = _make_review_config(tmp_path)
+        result = build_task(task, config, "p", MagicMock(), MagicMock(), backend=backend)
+        assert result.success is True
+        assert len(backend.fix_calls) == 2

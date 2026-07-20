@@ -2,8 +2,7 @@ from pathlib import Path
 
 from rich.console import Console
 
-from ossature.cli.decorators import requires_llm
-from ossature.config.loader import ConfigError, load_config
+from ossature.cli.decorators import load_config_or_exit, requires_llm
 from ossature.models.amd import AMDSpec
 from ossature.models.plan import TaskStatus
 from ossature.parsers.amd import AMDParseError, parse_amd_file
@@ -49,13 +48,7 @@ def run_build(
     spec_filter: str | None = None,
     force: bool = False,
 ) -> None:
-    try:
-        config = load_config(config_path)
-    except ConfigError as e:
-        from rich.markup import escape
-
-        console.print(f"[red]Error:[/] {escape(str(e))}")
-        raise SystemExit(1) from None
+    config = load_config_or_exit(config_path, console)
 
     plan_filepath = config.metadata_path / "plan.toml"
 
@@ -84,8 +77,8 @@ def run_build(
             if task.spec not in needed_specs and task.status != TaskStatus.DONE:
                 task.status = TaskStatus.SKIPPED
 
-    pending = sum(1 for t in plan.tasks if t.status.value == "pending")
-    failed = sum(1 for t in plan.tasks if t.status.value == "failed")
+    pending = sum(1 for t in plan.tasks if t.status == TaskStatus.PENDING)
+    failed = sum(1 for t in plan.tasks if t.status == TaskStatus.FAILED)
     actionable = pending + failed
     if actionable == 0:
         console.print("[green]All tasks already completed.[/green]")
@@ -99,7 +92,7 @@ def run_build(
     if spec_filter:
         status_parts.append(f"spec: {spec_filter.upper()}")
 
-    console.print(f"[bold]{config.name} v{config.version}[/bold] — {', '.join(status_parts)}\n")
+    console.print(f"[bold]{config.name} v{config.version}[/bold] - {', '.join(status_parts)}\n")
 
     # Parse specs for context assembly
     smd_files = list(config.spec_path.glob("**/*.smd"))

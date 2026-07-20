@@ -61,8 +61,6 @@ class TestConfig:
 DEFAULT_MODEL = "anthropic:claude-sonnet-4-6"
 DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434/v1"
 
-TOOL_REQUIRED_ROLES = frozenset({"build", "fixer"})
-
 
 @dataclass
 class LLMConfig:
@@ -118,6 +116,15 @@ class OssatureConfig:
     def spec_path(self) -> Path:
         return self.root / self.spec_dir
 
+    def rel_key(self, path: Path) -> str:
+        """A source path relative to the project root, prefixed with './'.
+
+        Used for manifest keys and display filenames. Prefix-safe, unlike
+        str(path).replace(str(root), '.'), which would substitute the root
+        string anywhere it recurs in the path.
+        """
+        return "./" + os.path.relpath(path, self.root)
+
     @property
     def context_path(self) -> Path:
         return self.root / self.context_dir
@@ -149,10 +156,6 @@ class OssatureConfig:
     @property
     def metadata_planners_path(self) -> Path:
         return self.metadata_path / "planners"
-
-    @property
-    def is_audited(self) -> bool:
-        return self.metadata_path.exists()
 
 
 def find_config(start_path: Path | None = None) -> Path | None:
@@ -403,7 +406,7 @@ def _warn_redundant_cd(config: OssatureConfig) -> None:
             rest = stripped[len(prefix) :]
             if rest == "" or rest[0] in (" ", "\t", ";", "&"):
                 warnings.warn(
-                    f"[build] {field_name} contains 'cd {output_dir}' — "
+                    f"[build] {field_name} contains 'cd {output_dir}' - "
                     f"this is unnecessary. All build commands already run "
                     f"inside the output directory ({output_dir!r}).",
                     stacklevel=2,

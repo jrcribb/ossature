@@ -4,14 +4,12 @@ from typing import Any
 
 from ossature.models.shared import Status
 from ossature.models.smd import Example, Priority, Requirement, SMDSpec
+from ossature.parsers.common import SpecParseError, find_h1_title, split_sections, status_error
 from ossature.parsers.frontmatter import FrontmatterError, split_frontmatter
 
 
-class SMDParseError(Exception):
-    def __init__(self, errors: list[str]) -> None:
-        self.errors = errors
-        summary = "\n".join(f"  - {e}" for e in errors)
-        super().__init__(f"Invalid SMD spec ({len(errors)} error(s)):\n{summary}")
+class SMDParseError(SpecParseError):
+    format_name = "SMD"
 
 
 def parse_smd(text: str) -> SMDSpec:
@@ -24,14 +22,7 @@ def parse_smd(text: str) -> SMDSpec:
 
     lines = body.strip().splitlines()
 
-    # H1 title
-    title = ""
-    idx = 0
-    for i, line in enumerate(lines):
-        if line.startswith("# "):
-            title = line.removeprefix("# ").strip()
-            idx = i + 1
-            break
+    title, idx = find_h1_title(lines)
     if not title:
         errors.append("Missing H1 title")
 
@@ -39,11 +30,8 @@ def parse_smd(text: str) -> SMDSpec:
         if not meta.get(key):
             errors.append(f"Missing required metadata: {key}")
 
-    status_values = {e.value for e in Status}
-    if (sv := meta.get("status")) and sv not in status_values:
-        errors.append(
-            f"Invalid status: '{sv}'. Expected one of: {', '.join(sorted(status_values))}"
-        )
+    if err := status_error(meta.get("status")):
+        errors.append(err)
 
     priority_values = {e.value for e in Priority}
     if (pv := meta.get("priority")) and pv not in priority_values:
@@ -53,22 +41,7 @@ def parse_smd(text: str) -> SMDSpec:
 
     depends = _coerce_depends(meta.get("depends", []))
 
-    # H2 sections
-    sections: dict[str, str] = {}
-    current_section: str | None = None
-    section_lines: list[str] = []
-
-    for line in lines[idx:]:
-        if line.startswith("## ") and not line.startswith("### "):
-            if current_section is not None:
-                sections[current_section] = "\n".join(section_lines)
-            current_section = line.removeprefix("## ").strip()
-            section_lines = []
-        else:
-            section_lines.append(line)
-
-    if current_section is not None:
-        sections[current_section] = "\n".join(section_lines)
+    sections = split_sections(lines[idx:])
 
     overview = sections.get("Overview", "").strip()
     if not overview:
@@ -118,7 +91,7 @@ def parse_smd(text: str) -> SMDSpec:
 
 
 def parse_smd_file(path: str | Path) -> SMDSpec:
-    return parse_smd(Path(path).read_text())
+    return parse_smd(Path(path).read_text(encoding="utf-8"))
 
 
 def _coerce_depends(value: Any) -> list[str]:
@@ -131,7 +104,7 @@ def _coerce_depends(value: Any) -> list[str]:
 
 def _parse_bullets(text: str) -> list[str]:
     return [
-        line.removeprefix("- ").strip()
+        line.strip().removeprefix("- ").strip()
         for line in text.strip().splitlines()
         if line.strip().startswith("- ")
     ]

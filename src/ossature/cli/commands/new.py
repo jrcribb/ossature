@@ -3,10 +3,11 @@ from pathlib import Path
 from rich.console import Console
 from rich.panel import Panel
 
-from ossature.cli.wizard.amd import ask_spec_id, prompt_amd_spec
+from ossature.cli.decorators import load_config_or_exit
+from ossature.cli.wizard.amd import prompt_amd_spec
+from ossature.cli.wizard.common import ask_spec_id
 from ossature.cli.wizard.smd import prompt_smd_spec
 from ossature.cli.wizard.vmd import prompt_vmd_spec
-from ossature.config.loader import ConfigError, load_config
 from ossature.models.amd import AMDSpec, Component, DataModel, Dependency
 from ossature.models.shared import Status
 from ossature.models.smd import (
@@ -19,8 +20,6 @@ from ossature.parsers.vmd import parse_vmd
 from ossature.renderer.amd import save_amd
 from ossature.renderer.smd import save_smd
 from ossature.renderer.vmd import save_vmd
-
-console = Console()
 
 
 def create_template_smd_spec(name: str) -> SMDSpec:
@@ -203,13 +202,14 @@ def run_new(
     console: Console,
 ) -> None:
 
-    try:
-        config = load_config(config_path)
-    except ConfigError as e:
-        from rich.markup import escape
+    config = load_config_or_exit(config_path, console)
 
-        console.print(f"[red]Error:[/] {escape(str(e))}")
-        raise SystemExit(1) from None
+    # Checked before any wizard runs, so the user is not sent through the
+    # prompts only to hit a FileExistsError at save time
+    target_path = config.spec_path / f"{name}.{spec_type}"
+    if target_path.exists():
+        console.print(f"[red]Error:[/] File already exists: {target_path}")
+        raise SystemExit(1)
 
     console.print(f"\n[bold]Creating new spec:[/] {name}\n")
 
@@ -256,9 +256,9 @@ def run_new(
             Panel(
                 f"[green]✓[/green] Architecture spec [cyan]{amd_spec.spec_id}[/cyan] created "
                 f"as [cyan]{name}.amd[/cyan] with:\n"
-                f"  • {len(amd_spec.components)} components(s)\n"
-                f"  • {len(amd_spec.data_models)} data_models(s)\n"
-                f"  • {len(amd_spec.dependencies)} dependencies(s)",
+                f"  • {len(amd_spec.components)} component(s)\n"
+                f"  • {len(amd_spec.data_models)} data model(s)\n"
+                f"  • {len(amd_spec.dependencies)} dependency(ies)",
                 title="Summary",
                 border_style="green",
             )
@@ -267,7 +267,7 @@ def run_new(
     elif spec_type == "vmd":
         vmd_path = config.spec_path / f"{name}.vmd"
         if interactive:
-            vmd_spec = prompt_vmd_spec(name, spec_dir=config.spec_path, console=console)
+            vmd_spec = prompt_vmd_spec(spec_dir=config.spec_path, console=console)
             if vmd_spec is None:
                 raise SystemExit(0)
             save_vmd(vmd_spec, path=vmd_path)

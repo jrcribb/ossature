@@ -9,8 +9,10 @@ from rich.status import Status
 
 from ossature.audit.fixer import (
     FixContext,
+    _apply_finding_fix,
     _build_cross_spec_finding_prompt,
     _build_finding_prompt,
+    _fixable_findings,
     _resolve_spec_sandboxed,
     _verify_spec_parses,
     fix_cross_spec_findings,
@@ -197,6 +199,16 @@ class TestVerifySpecParses:
         amd_file.write_text("not a valid architecture")
         assert _verify_spec_parses(amd_file) is False
 
+    def test_valid_vmd_passes(self, tmp_path: Path) -> None:
+        vmd_file = tmp_path / "test.vmd"
+        vmd_file.write_text("@spec S\n\nf(x)\na | 1 | 2\n")
+        assert _verify_spec_parses(vmd_file) is True
+
+    def test_invalid_vmd_fails(self, tmp_path: Path) -> None:
+        vmd_file = tmp_path / "test.vmd"
+        vmd_file.write_text("f(x)\na | 1 | 2\n")
+        assert _verify_spec_parses(vmd_file) is False
+
 
 class TestBuildFindingPrompt:
     def test_includes_all_finding_fields(self) -> None:
@@ -374,7 +386,7 @@ class TestBuildSpecFileMap:
         smd_files = [spec_dir / "auth.smd", spec_dir / "api.smd"]
         parsed_smds = [make_smd("AUTH"), make_smd("API")]
 
-        result = _build_spec_file_map(smd_files, [], parsed_smds, [], spec_dir)
+        result = _build_spec_file_map(smd_files, parsed_smds, spec_dir)
         assert result == {"AUTH": "auth.smd", "API": "api.smd"}
 
     def test_nested_spec_paths(self, tmp_path: Path) -> None:
@@ -384,7 +396,7 @@ class TestBuildSpecFileMap:
         smd_files = [spec_dir / "sub" / "auth.smd"]
         parsed_smds = [make_smd("AUTH")]
 
-        result = _build_spec_file_map(smd_files, [], parsed_smds, [], spec_dir)
+        result = _build_spec_file_map(smd_files, parsed_smds, spec_dir)
         assert result == {"AUTH": "sub/auth.smd"}
 
 
@@ -736,3 +748,44 @@ class TestAuditConfigDefaults:
     def test_max_fix_cycles_default(self) -> None:
         cfg = AuditConfig()
         assert cfg.max_fix_cycles == 3
+
+
+class TestApplyFindingFix:
+    def test_agent_error_reverts_and_returns_empty(
+        self, tmp_path: Path, quiet_console: Console, quiet_status: Status
+    ) -> None:
+        spec = tmp_path / "auth.smd"
+        spec.write_text("original", encoding="utf-8")
+        agent = MagicMock()
+        agent.run_sync.side_effect = RuntimeError("boom")
+
+        edited = _apply_finding_fix(
+            agent,
+            "test:model",
+            "fix prompt",
+            ["auth.smd"],
+            tmp_path,
+            quiet_console,
+            quiet_status,
+            None,
+        )
+
+        assert edited == []
+        assert spec.read_text(encoding="utf-8") == "original"
+
+
+class TestFixableFindings:
+    def test_info_only_kept_when_no_errors_or_warnings(self) -> None:
+        findings = [
+            AuditFinding(severity=Severity.INFO, location="a", issue="i1", suggestion="s1"),
+            AuditFinding(severity=Severity.INFO, location="b", issue="i2", suggestion="s2"),
+        ]
+        assert _fixable_findings(findings) == findings
+
+    def test_info_dropped_when_error_present(self) -> None:
+        info = AuditFinding(severity=Severity.INFO, location="a", issue="i", suggestion="s")
+        error = AuditFinding(severity=Severity.ERROR, location="b", issue="e", suggestion="s")
+
+        result = _fixable_findings([info, error])
+
+        assert result == [error]

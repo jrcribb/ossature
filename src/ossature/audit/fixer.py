@@ -1,6 +1,7 @@
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from pydantic_ai import Agent, ModelRetry, RunContext
 from pydantic_ai.exceptions import UnexpectedModelBehavior
@@ -54,7 +55,7 @@ def _register_fixer_tools(agent: Agent[FixContext, str]) -> None:
             if not full_path.exists():
                 return f"Error: {path} does not exist"
             ctx.deps.status.update(f"fixing -- reading {path}")
-            return full_path.read_text()
+            return full_path.read_text(encoding="utf-8")
         except OSError as e:
             return f"Error reading {path}: {e}"
 
@@ -65,7 +66,7 @@ def _register_fixer_tools(agent: Agent[FixContext, str]) -> None:
             if not full_path.exists():
                 return f"Error: {path} does not exist"
             ctx.deps.status.update(f"fixing -- searching {path}")
-            lines = full_path.read_text().splitlines()
+            lines = full_path.read_text(encoding="utf-8").splitlines()
             compiled = re.compile(pattern, re.IGNORECASE)
             matches: list[str] = []
             for i, line in enumerate(lines):
@@ -92,7 +93,7 @@ def _register_fixer_tools(agent: Agent[FixContext, str]) -> None:
         try:
             if not full_path.exists():
                 raise ModelRetry(f"Cannot edit '{path}': file does not exist.")
-            content = full_path.read_text()
+            content = full_path.read_text(encoding="utf-8")
         except OSError as e:
             return f"Error reading {path}: {e}"
 
@@ -171,6 +172,61 @@ def _build_cross_spec_finding_prompt(
     )
 
 
+def _apply_finding_fix(
+    agent: Any,
+    fixer_model: str,
+    prompt: str,
+    target_files: list[str],
+    spec_dir: Path,
+    console: Console,
+    status: Status,
+    tracker: UsageTracker | None,
+) -> list[str]:
+    """Run the fixer for one finding: back up target_files, apply the fix,
+    verify every edited file still parses, and revert on failure.
+
+    Returns the files edited (empty if reverted or the agent raised).
+    """
+    backups: dict[Path, str] = {}
+    for filepath in target_files:
+        full_path = (spec_dir / filepath).resolve()
+        if full_path.exists():
+            backups[full_path] = full_path.read_text(encoding="utf-8")
+
+    def _revert() -> None:
+        for full_path, content in backups.items():
+            full_path.write_text(content)
+
+    fix_ctx = FixContext(spec_dir=spec_dir, console=console, status=status)
+    try:
+        result = agent.run_sync(prompt, deps=fix_ctx)
+        if tracker is not None:
+            tracker.add(result.usage, model_name=fixer_model)
+
+        for filepath in fix_ctx.edited_files:
+            full_path = (spec_dir / filepath).resolve()
+            if not _verify_spec_parses(full_path):
+                console.log(f"    [red]Fix broke {filepath} parsing - reverting[/red]")
+                _revert()
+                return []
+
+        return list(fix_ctx.edited_files)
+    except Exception as e:
+        console.log(f"    [red]Fix failed: {_format_fix_error(e)} - skipping[/red]")
+        _revert()
+        return []
+
+
+def _fixable_findings[F: (AuditFinding, CrossSpecFinding)](findings: list[F]) -> list[F]:
+    """Findings to attempt, error/warning first. INFO findings are dropped
+    when any error or warning is present."""
+    has_errors_or_warnings = any(f.severity in (Severity.ERROR, Severity.WARNING) for f in findings)
+    ordered = sorted(findings, key=lambda f: _SEVERITY_ORDER.get(f.severity, 99))
+    if has_errors_or_warnings:
+        return [f for f in ordered if f.severity != Severity.INFO]
+    return ordered
+
+
 def fix_spec_findings(
     findings: list[AuditFinding],
     spec_file: str,
@@ -185,58 +241,18 @@ def fix_spec_findings(
     fixer_model = config.llm.model_for("fixer")
     all_edited: list[str] = []
 
-    has_errors_or_warnings = any(f.severity in (Severity.ERROR, Severity.WARNING) for f in findings)
-    sorted_findings = sorted(findings, key=lambda f: _SEVERITY_ORDER.get(f.severity, 99))
-
     # Findings can live in the SMD or in one of the spec's AMD files, so
     # every candidate target is backed up and parse-verified per attempt.
     target_files = [spec_file, *(amd_files or [])]
 
-    for finding in sorted_findings:
-        if finding.severity == Severity.INFO and has_errors_or_warnings:
-            continue
+    for finding in _fixable_findings(findings):
         prompt = _build_finding_prompt(finding, spec_file, amd_files)
-
-        # Save backups before each fix attempt
-        backups: dict[Path, str] = {}
-        for filepath in target_files:
-            full_path = (spec_dir / filepath).resolve()
-            if full_path.exists():
-                backups[full_path] = full_path.read_text()
-
-        fix_ctx = FixContext(
-            spec_dir=spec_dir,
-            console=console,
-            status=status,
+        edited = _apply_finding_fix(
+            agent, fixer_model, prompt, target_files, spec_dir, console, status, tracker
         )
-
-        try:
-            result = agent.run_sync(prompt, deps=fix_ctx)
-            if tracker is not None:
-                tracker.add(result.usage, model_name=fixer_model)
-
-            # Verify all edited files still parse
-            revert = False
-            for filepath in fix_ctx.edited_files:
-                full_path = (spec_dir / filepath).resolve()
-                if not _verify_spec_parses(full_path):
-                    console.log(f"    [red]Fix broke {filepath} parsing - reverting[/red]")
-                    revert = True
-                    break
-
-            if revert:
-                for full_path, content in backups.items():
-                    full_path.write_text(content)
-                continue
-
-            for f in fix_ctx.edited_files:
-                if f not in all_edited:
-                    all_edited.append(f)
-
-        except Exception as e:
-            console.log(f"    [red]Fix failed: {_format_fix_error(e)} - skipping[/red]")
-            for full_path, content in backups.items():
-                full_path.write_text(content)
+        for f in edited:
+            if f not in all_edited:
+                all_edited.append(f)
 
     return all_edited
 
@@ -254,60 +270,26 @@ def fix_cross_spec_findings(
     fixer_model = config.llm.model_for("fixer")
     all_edited: list[str] = []
 
-    has_errors_or_warnings = any(f.severity in (Severity.ERROR, Severity.WARNING) for f in findings)
-    sorted_findings = sorted(findings, key=lambda f: _SEVERITY_ORDER.get(f.severity, 99))
-
-    for finding in sorted_findings:
-        if finding.severity == Severity.INFO and has_errors_or_warnings:
-            continue
-
+    for finding in _fixable_findings(findings):
         # Only include files for specs mentioned in this finding
         relevant_files = {sid: spec_files[sid] for sid in finding.specs if sid in spec_files}
         if not relevant_files:
             continue
 
         prompt = _build_cross_spec_finding_prompt(finding, relevant_files)
-
-        # Save backups for all relevant files
-        backups: dict[Path, str] = {}
-        for filepath in relevant_files.values():
-            full_path = (spec_dir / filepath).resolve()
-            if full_path.exists():
-                backups[full_path] = full_path.read_text()
-
-        fix_ctx = FixContext(
-            spec_dir=spec_dir,
-            console=console,
-            status=status,
+        edited = _apply_finding_fix(
+            agent,
+            fixer_model,
+            prompt,
+            list(relevant_files.values()),
+            spec_dir,
+            console,
+            status,
+            tracker,
         )
-
-        try:
-            result = agent.run_sync(prompt, deps=fix_ctx)
-            if tracker is not None:
-                tracker.add(result.usage, model_name=fixer_model)
-
-            # Verify all edited files still parse
-            revert = False
-            for filepath in fix_ctx.edited_files:
-                full_path = (spec_dir / filepath).resolve()
-                if not _verify_spec_parses(full_path):
-                    console.log(f"    [red]Fix broke {filepath} parsing - reverting[/red]")
-                    revert = True
-                    break
-
-            if revert:
-                for full_path, content in backups.items():
-                    full_path.write_text(content)
-                continue
-
-            for f in fix_ctx.edited_files:
-                if f not in all_edited:
-                    all_edited.append(f)
-
-        except Exception as e:
-            console.log(f"    [red]Fix failed: {_format_fix_error(e)} - skipping[/red]")
-            for full_path, content in backups.items():
-                full_path.write_text(content)
+        for f in edited:
+            if f not in all_edited:
+                all_edited.append(f)
 
     return all_edited
 
@@ -316,13 +298,16 @@ def _verify_spec_parses(path: Path) -> bool:
     """Check that a spec file still parses after editing."""
     from ossature.parsers.amd import AMDParseError, parse_amd_file
     from ossature.parsers.smd import SMDParseError, parse_smd_file
+    from ossature.parsers.vmd import VMDParseError, parse_vmd_file
 
-    suffix = path.name
+    suffix = path.suffix
     try:
-        if suffix.endswith(".amd"):
+        if suffix == ".amd":
             parse_amd_file(path)
+        elif suffix == ".vmd":
+            parse_vmd_file(path)
         else:
             parse_smd_file(path)
         return True
-    except SMDParseError, AMDParseError:
+    except SMDParseError, AMDParseError, VMDParseError:
         return False

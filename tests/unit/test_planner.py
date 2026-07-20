@@ -5,9 +5,6 @@ from conftest import make_smd, make_task
 
 from ossature.audit.graph import SpecGraph, SpecGraphEntry
 from ossature.audit.planner import (
-    PlanFormatError,
-    _format_previous_tasks,
-    _resolve_preserved_refs,
     compute_spec_diff,
     incremental_merge_plan,
     load_plan,
@@ -19,8 +16,8 @@ from ossature.audit.planner import (
     render_spec_snapshot,
     write_plan,
     write_planner_snapshot,
-    write_task_definitions,
 )
+from ossature.audit.planner.planning import _format_previous_tasks, _resolve_preserved_refs
 from ossature.build.state import BuildState, TaskState, load_state, write_state
 from ossature.models.amd import AMDSpec, Component
 from ossature.models.plan import (
@@ -336,81 +333,6 @@ class TestPlanTomlRoundtrip:
         filepath.write_text("not valid { toml [[[")
         assert load_plan(filepath) is None
 
-    def test_load_old_format_raises(self, temp_dir: Path):
-        """Plans with prefixed spec_refs (old format) raise PlanFormatError."""
-        filepath = temp_dir / "old.toml"
-        filepath.write_text(
-            "[meta]\n"
-            'generated_at = "2026-01-01T00:00:00Z"\n'
-            "total_tasks = 1\n"
-            'specs = ["AUTH"]\n\n'
-            "[[task]]\n"
-            'id = "001"\n'
-            'spec = "AUTH"\n'
-            'title = "T"\n'
-            'description = "d"\n'
-            "outputs = []\n"
-            "depends_on = []\n"
-            'spec_refs = ["AUTH:overview"]\n'
-            "arch_refs = []\n"
-            'status = "pending"\n'
-            'verify = ""\n'
-        )
-
-        with pytest.raises(PlanFormatError, match="outdated spec_refs format"):
-            load_plan(filepath)
-
-    def test_load_old_format_arch_refs_raises(self, temp_dir: Path):
-        """Old-format arch_refs also raise PlanFormatError."""
-        filepath = temp_dir / "old.toml"
-        filepath.write_text(
-            "[meta]\n"
-            'generated_at = "2026-01-01T00:00:00Z"\n'
-            "total_tasks = 1\n"
-            'specs = ["AUTH"]\n\n'
-            "[[task]]\n"
-            'id = "001"\n'
-            'spec = "AUTH"\n'
-            'title = "T"\n'
-            'description = "d"\n'
-            "outputs = []\n"
-            "depends_on = []\n"
-            "spec_refs = []\n"
-            'arch_refs = ["AUTH:Components > X"]\n'
-            'status = "pending"\n'
-            'verify = ""\n'
-        )
-
-        with pytest.raises(PlanFormatError):
-            load_plan(filepath)
-
-
-class TestWriteTaskDefinitions:
-    def test_creates_task_directories(self, temp_dir: Path):
-        smds = [make_smd("AUTH")]
-        graph = SpecGraph(
-            specs=[SpecGraphEntry(id="AUTH", file="specs/auth.smd", depends=[])],
-            levels=[["AUTH"]],
-        )
-        spec_plans = {
-            "AUTH": _make_spec_plan(
-                [
-                    {"title": "Scaffold", "outputs": ["src/mod.rs"]},
-                    {"title": "Types", "outputs": ["src/types.rs"], "depends_on": [1]},
-                ]
-            )
-        }
-
-        plan = merge_into_global_plan(spec_plans, graph, smds)
-        tasks_dir = temp_dir / "tasks"
-
-        write_task_definitions(plan, tasks_dir)
-
-        task_dirs = sorted(tasks_dir.iterdir())
-        assert len(task_dirs) == 2
-        assert (task_dirs[0] / "task.toml").exists()
-        assert (task_dirs[1] / "task.toml").exists()
-
 
 def _make_existing_plan(tasks: list[PlanTask]) -> Plan:
     specs = sorted({t.spec for t in tasks})
@@ -635,6 +557,93 @@ class TestIncrementalMergePlan:
         # Second API task (005) should depend on first API task (004)
         api_second = plan.tasks[4]
         assert "004" in api_second.depends_on
+
+    def test_preserved_spec_with_unchanged_numbering_keeps_intra_spec_deps(self):
+        """Preserved specs that keep their task numbering must not lose deps.
+
+        When only a downstream spec changes, upstream specs keep identical
+        IDs, so every remap is identity. The dep rewiring must still keep
+        intra-spec dependencies of preserved specs intact.
+        """
+        existing = _make_existing_plan(
+            [
+                make_task("001", "AUTH", outputs=["a.rs"], status=TaskStatus.DONE),
+                make_task(
+                    "002", "AUTH", outputs=["b.rs"], depends_on=["001"], status=TaskStatus.DONE
+                ),
+                make_task(
+                    "003", "API", outputs=["c.rs"], depends_on=["002"], status=TaskStatus.DONE
+                ),
+                make_task(
+                    "004", "API", outputs=["d.rs"], depends_on=["003"], status=TaskStatus.DONE
+                ),
+                make_task(
+                    "005", "DB", outputs=["e.rs"], depends_on=["004"], status=TaskStatus.DONE
+                ),
+            ]
+        )
+        smds = [
+            make_smd("AUTH"),
+            make_smd("API", depends=["AUTH"]),
+            make_smd("DB", depends=["API"]),
+        ]
+        graph = SpecGraph(
+            specs=[
+                SpecGraphEntry(id="AUTH", file="specs/auth.smd", depends=[]),
+                SpecGraphEntry(id="API", file="specs/api.smd", depends=["AUTH"]),
+                SpecGraphEntry(id="DB", file="specs/db.smd", depends=["API"]),
+            ],
+            levels=[["AUTH"], ["API"], ["DB"]],
+        )
+
+        # Re-plan only DB, the last spec in the chain
+        new_db_plan = _make_spec_plan(
+            [
+                {"title": "DB Scaffold v2", "outputs": ["e.rs"]},
+                {"title": "DB Models v2", "outputs": ["f.rs"], "depends_on": [1]},
+            ]
+        )
+
+        plan, _, _ = incremental_merge_plan(
+            existing_plan=existing,
+            new_spec_plans={"DB": new_db_plan},
+            changed_spec_ids={"DB"},
+            graph=graph,
+            parsed_smds=smds,
+        )
+
+        by_id = {t.id: t for t in plan.tasks}
+        # Preserved specs keep numbering and every dependency
+        assert by_id["002"].depends_on == ["001"]
+        assert by_id["003"].depends_on == ["002"]
+        assert by_id["004"].depends_on == ["003"]
+        # Re-planned DB is wired to API's last task
+        assert by_id["005"].depends_on == ["004"]
+        assert by_id["006"].depends_on == ["005"]
+
+    def test_preserved_first_task_gains_missing_upstream_dep(self):
+        """A preserved first task without a cross-spec dep gets one appended."""
+        existing = _make_existing_plan(
+            [
+                make_task("001", "AUTH", outputs=["a.rs"], status=TaskStatus.DONE),
+                make_task("002", "API", outputs=["c.rs"], status=TaskStatus.DONE),
+            ]
+        )
+        smds = [make_smd("AUTH"), make_smd("API", depends=["AUTH"])]
+        graph = _two_spec_graph()
+
+        new_auth_plan = _make_spec_plan([{"title": "Auth v2", "outputs": ["a.rs"]}])
+
+        plan, _, _ = incremental_merge_plan(
+            existing_plan=existing,
+            new_spec_plans={"AUTH": new_auth_plan},
+            changed_spec_ids={"AUTH"},
+            graph=graph,
+            parsed_smds=smds,
+        )
+
+        api_task = next(t for t in plan.tasks if t.spec == "API")
+        assert api_task.depends_on == ["001"]
 
     def test_unmatched_changed_tasks_are_pending(self):
         """Changed-spec tasks with no output match are pending."""
@@ -1694,14 +1703,3 @@ class TestSourceField:
         resolved = _resolve_preserved_refs(spec_plan, [old_task])
         assert isinstance(resolved.tasks[0], PlannerTask)
         assert resolved.tasks[0].source == ["assets/*.mp3"]
-
-    def test_write_task_definitions_emits_source_with_prefix(self, temp_dir: Path):
-        plan = Plan(
-            meta=PlanMeta(generated_at="2026-01-01T00:00:00Z", total_tasks=1, specs=["AUDIO"]),
-            tasks=[self._task(source=["assets/audio/*.mp3"])],
-        )
-        tasks_dir = temp_dir / "tasks"
-        write_task_definitions(plan, tasks_dir)
-        task_dirs = sorted(tasks_dir.iterdir())
-        content = (task_dirs[0] / "task.toml").read_text()
-        assert "context://assets/audio/*.mp3" in content

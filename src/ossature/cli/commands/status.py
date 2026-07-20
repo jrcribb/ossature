@@ -4,7 +4,7 @@ from rich.console import Console
 from rich.table import Table
 from rich.text import Text
 
-from ossature.config.loader import ConfigError, load_config
+from ossature.cli.decorators import load_config_or_exit
 from ossature.models.plan import TaskStatus
 
 
@@ -12,13 +12,7 @@ def run_status(
     config_path: Path | None,
     console: Console,
 ) -> None:
-    try:
-        config = load_config(config_path)
-    except ConfigError as e:
-        from rich.markup import escape
-
-        console.print(f"[red]Error:[/] {escape(str(e))}")
-        raise SystemExit(1) from None
+    config = load_config_or_exit(config_path, console)
 
     plan_filepath = config.metadata_path / "plan.toml"
 
@@ -50,7 +44,7 @@ def run_status(
     # a manual plan.toml edit).
     actual_specs = {t.spec for t in plan.tasks} | set(plan.meta.specs)
     console.print(
-        f"[bold]{config.name}[/bold] — {len(actual_specs)} specs, {len(plan.tasks)} tasks\n"
+        f"[bold]{config.name}[/bold] - {len(actual_specs)} specs, {len(plan.tasks)} tasks\n"
     )
 
     tbl = Table(show_header=True, expand=False, pad_edge=False)
@@ -87,7 +81,7 @@ def run_status(
     if failed_task:
         console.print(
             f"\n  Current: {failed_task.spec} task {failed_task.id} "
-            f"({failed_task.title}) — [red]FAILED[/red]"
+            f"({failed_task.title}) - [red]FAILED[/red]"
         )
         console.print(
             "  Run [cyan]ossature retry[/] to re-attempt, "

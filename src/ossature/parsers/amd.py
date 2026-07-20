@@ -3,14 +3,19 @@ from pathlib import Path
 
 from ossature.models.amd import AMDSpec, Component, DataModel, Dependency
 from ossature.models.shared import Status
+from ossature.parsers.common import (
+    FENCE_CLOSE_RE,
+    FENCE_OPEN_RE,
+    SpecParseError,
+    find_h1_title,
+    split_sections,
+    status_error,
+)
 from ossature.parsers.frontmatter import FrontmatterError, split_frontmatter
 
 
-class AMDParseError(Exception):
-    def __init__(self, errors: list[str]) -> None:
-        self.errors = errors
-        summary = "\n".join(f"  - {e}" for e in errors)
-        super().__init__(f"Invalid AMD spec ({len(errors)} error(s)):\n{summary}")
+class AMDParseError(SpecParseError):
+    format_name = "AMD"
 
 
 _CODE_BLOCK_RE = re.compile(r"```(\w*)\n(.*?)```", re.DOTALL)
@@ -18,10 +23,6 @@ _CODE_BLOCK_RE = re.compile(r"```(\w*)\n(.*?)```", re.DOTALL)
 _KNOWN_SECTIONS = frozenset(
     {"Overview", "Components", "Data Models", "Flow", "Dependencies", "Notes"}
 )
-
-
-_FENCE_OPEN_RE = re.compile(r"^ {0,3}```")
-_FENCE_CLOSE_RE = re.compile(r"^ {0,3}`{3,}\s*$")
 
 
 def _mask_code_blocks(text: str) -> str:
@@ -38,14 +39,32 @@ def _mask_code_blocks(text: str) -> str:
     for line in text.split("\n"):
         fence_line = False
         if in_fence:
-            if _FENCE_CLOSE_RE.match(line):
+            if FENCE_CLOSE_RE.match(line):
                 in_fence = False
                 fence_line = True
-        elif _FENCE_OPEN_RE.match(line):
+        elif FENCE_OPEN_RE.match(line):
             in_fence = True
             fence_line = True
         out.append(" " * len(line) if fence_line or in_fence else line)
     return "\n".join(out)
+
+
+def _strip_enclosing_fence(text: str) -> str:
+    """Remove one code fence wrapping the whole text, if present.
+
+    The renderer fences the Flow section, so keeping the fence in the
+    parsed value would nest another fence on every render/parse cycle.
+    Text that is not one single fenced block is returned unchanged.
+    """
+    lines = text.splitlines()
+    if len(lines) < 2:
+        return text
+    if not (FENCE_OPEN_RE.match(lines[0]) and FENCE_CLOSE_RE.match(lines[-1])):
+        return text
+    interior = lines[1:-1]
+    if any(FENCE_OPEN_RE.match(line) for line in interior):
+        return text
+    return "\n".join(interior).strip()
 
 
 def parse_amd(text: str) -> AMDSpec:
@@ -58,14 +77,11 @@ def parse_amd(text: str) -> AMDSpec:
 
     lines = body.strip().splitlines()
 
-    # H1 title
-    title = ""
-    idx = 0
-    for i, line in enumerate(lines):
-        if line.startswith("# "):
-            title = line.removeprefix("# ").strip()
-            idx = i + 1
-            break
+    # The renderer writes '# Architecture: {title}', so the prefix is
+    # presentation, not part of the title; keeping it would double the
+    # prefix on every render/parse cycle.
+    title, idx = find_h1_title(lines)
+    title = title.removeprefix("Architecture:").strip()
     if not title:
         errors.append("Missing H1 title")
 
@@ -73,28 +89,10 @@ def parse_amd(text: str) -> AMDSpec:
         if not meta.get(key):
             errors.append(f"Missing required metadata: {key}")
 
-    status_values = {e.value for e in Status}
-    if (sv := meta.get("status")) and sv not in status_values:
-        errors.append(
-            f"Invalid status: '{sv}'. Expected one of: {', '.join(sorted(status_values))}"
-        )
+    if err := status_error(meta.get("status")):
+        errors.append(err)
 
-    # H2 sections
-    sections: dict[str, str] = {}
-    current_section: str | None = None
-    section_lines: list[str] = []
-
-    for line in lines[idx:]:
-        if line.startswith("## ") and not line.startswith("### "):
-            if current_section is not None:
-                sections[current_section] = "\n".join(section_lines)
-            current_section = line.removeprefix("## ").strip()
-            section_lines = []
-        else:
-            section_lines.append(line)
-
-    if current_section is not None:
-        sections[current_section] = "\n".join(section_lines)
+    sections = split_sections(lines[idx:])
 
     overview = sections.get("Overview", "").strip()
     if not overview:
@@ -138,7 +136,7 @@ def parse_amd(text: str) -> AMDSpec:
         overview=overview,
         components=components,
         data_models=data_models,
-        flow=sections.get("Flow", "").strip(),
+        flow=_strip_enclosing_fence(sections.get("Flow", "").strip()),
         dependencies=dependencies,
         notes=sections.get("Notes", "").strip(),
         warnings=warnings,
@@ -146,7 +144,7 @@ def parse_amd(text: str) -> AMDSpec:
 
 
 def parse_amd_file(path: str | Path) -> AMDSpec:
-    return parse_amd(Path(path).read_text())
+    return parse_amd(Path(path).read_text(encoding="utf-8"))
 
 
 def _marker_region(body: str, marker: re.Match[str], marker_starts: list[int]) -> str:

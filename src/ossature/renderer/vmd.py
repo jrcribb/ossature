@@ -1,4 +1,5 @@
 import json
+import re
 from pathlib import Path
 
 from ossature.models.vmd import (
@@ -9,8 +10,21 @@ from ossature.models.vmd import (
     ValueCase,
     VMDSpec,
 )
+from ossature.renderer.common import write_spec
 
-_WORD_SPECIALS = set(' \t"\\|<>;&')
+# '#' must be in here: a bare word containing it would lose its tail to the
+# parser's comment stripping on reparse
+_WORD_SPECIALS = set(' \t"\\|<>;&#')
+
+# Must accept exactly what the parser's _COVERS_SLUG_RE accepts; anything
+# else renders as a quoted string
+_COVERS_SLUG_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
+def _render_covers_target(target: str) -> str:
+    if _COVERS_SLUG_RE.match(target):
+        return target
+    return json.dumps(target)
 
 
 def _render_fixture(fixture: Fixture) -> str:
@@ -50,7 +64,7 @@ def _render_value_case(case: ValueCase) -> str:
 def render_group(group: Group) -> str:
     lines = []
     if group.covers:
-        lines.append(f"@covers {', '.join(group.covers)}")
+        lines.append(f"@covers {', '.join(_render_covers_target(t) for t in group.covers)}")
     lines.append(_render_signature(group))
     lines.extend(_render_value_case(c) for c in group.cases)
     return "\n".join(lines)
@@ -99,7 +113,7 @@ def _render_command_step(step: CommandStep) -> list[str]:
 def render_scenario(scenario: Scenario) -> str:
     lines = []
     if scenario.covers:
-        lines.append(f"@covers {', '.join(scenario.covers)}")
+        lines.append(f"@covers {', '.join(_render_covers_target(t) for t in scenario.covers)}")
     lines.append(f"scenario {scenario.name}:")
     for given in scenario.givens:
         if given.fixture:
@@ -138,10 +152,4 @@ def render_vmd(spec: VMDSpec) -> str:
 
 
 def save_vmd(spec: VMDSpec, path: Path, overwrite: bool = False) -> Path:
-    if path.exists() and not overwrite:
-        raise FileExistsError(f"File already exists: {path}")
-
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(render_vmd(spec), encoding="utf-8")
-
-    return path
+    return write_spec(render_vmd(spec), path, overwrite)

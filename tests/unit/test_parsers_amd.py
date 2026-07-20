@@ -68,7 +68,7 @@ class TestAMDParser:
     def test_parse_valid_spec(self):
         spec = parse_amd(VALID_SPEC)
 
-        assert spec.title == "Architecture: Test System"
+        assert spec.title == "Test System"
         assert spec.spec_id == "SMD-TEST-001"
         assert spec.status == Status.DRAFT
         assert spec.overview == "System overview here."
@@ -104,10 +104,47 @@ class TestAMDParser:
 
         spec = parse_amd_file(spec_file)
 
-        assert spec.title == "Architecture: Test System"
+        assert spec.title == "Test System"
         assert spec.spec_id == "SMD-TEST-001"
         assert spec.status == Status.DRAFT
         assert len(spec.components) == 1
+
+    def test_single_line_flow_kept_as_is(self):
+        amd = VALID_SPEC.replace("## Flow", "## Ignored").replace(
+            "## Notes", "## Flow\n\nClient -> DB\n\n## Notes"
+        )
+        spec = parse_amd(amd)
+        assert spec.flow == "Client -> DB"
+
+    def test_multi_line_unfenced_flow_kept_as_is(self):
+        amd = VALID_SPEC.replace("## Flow", "## Ignored").replace(
+            "## Notes", "## Flow\n\nClient -> API\nAPI -> DB\n\n## Notes"
+        )
+        spec = parse_amd(amd)
+        assert spec.flow == "Client -> API\nAPI -> DB"
+
+    def test_flow_with_two_fenced_blocks_kept_as_is(self):
+        flow = "```\nClient -> API\n```\n\n```\nAPI -> DB\n```"
+        amd = VALID_SPEC.replace("## Flow", "## Ignored").replace(
+            "## Notes", f"## Flow\n\n{flow}\n\n## Notes"
+        )
+        spec = parse_amd(amd)
+        assert spec.flow == flow
+
+    def test_h2_inside_interface_fence_is_not_a_section(self):
+        amd = VALID_SPEC.replace("class APIServer:", "## looks like a heading\nclass APIServer:")
+        spec = parse_amd(amd)
+        assert "## looks like a heading" in spec.components[0].interface
+        assert spec.warnings == []
+
+    def test_render_parse_render_is_stable(self):
+        # Guards against the title prefix doubling and the flow fence
+        # nesting on repeated render/parse cycles
+        spec = parse_amd(VALID_SPEC)
+        once = render_amd(spec)
+        twice = render_amd(parse_amd(once))
+        assert once == twice
+        assert not parse_amd(once).flow.startswith("```")
 
     def test_missing_title(self):
         text = dedent("""\
@@ -1580,8 +1617,9 @@ class TestAMDParser:
         rendered = render_amd(original)
         parsed = parse_amd(rendered)
 
-        # Title gets prefixed with "Architecture: " by the renderer
-        assert parsed.title == f"Architecture: {original.title}"
+        # The "Architecture: " prefix the renderer writes is presentation
+        # only; the parser strips it back off
+        assert parsed.title == original.title
         assert parsed.spec_id == original.spec_id
         assert parsed.status == original.status
         assert parsed.overview == original.overview
@@ -1602,7 +1640,7 @@ class TestAMDParser:
             assert parsed_dm.definition == orig_dm.definition
             assert parsed_dm.definition_language == orig_dm.definition_language
 
-        assert original.flow in parsed.flow
+        assert parsed.flow == original.flow
 
         assert len(parsed.dependencies) == len(original.dependencies)
         for orig_dep, parsed_dep in zip(original.dependencies, parsed.dependencies, strict=True):
